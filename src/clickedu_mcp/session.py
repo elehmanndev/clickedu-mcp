@@ -8,9 +8,10 @@ from pathlib import Path
 
 from curl_cffi import CurlMime
 from curl_cffi import requests as cffi
-from dotenv import load_dotenv
 
-load_dotenv()
+from .config import config_dir, load_env
+
+load_env()
 
 ENCODING = "iso-8859-15"
 # Markers that mean "you are not logged in and looking at the login/pass-file page".
@@ -42,7 +43,7 @@ class ClickeduSession:
         self._id_usuari = _env("CLICKEDU_ID_USUARI", required=False)
         self._passfile = Path(_env("CLICKEDU_PASSFILE")).expanduser()
         self._cookie_path = Path(
-            os.environ.get("CLICKEDU_COOKIE_PATH", ".cookies/session.jar")
+            os.environ.get("CLICKEDU_COOKIE_PATH") or (config_dir() / "cookies.jar")
         ).expanduser()
         self._cookie_path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.Lock()
