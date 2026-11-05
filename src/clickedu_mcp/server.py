@@ -7,6 +7,7 @@ preview; no bulk writes, no loops, no autonomous runs.
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -14,7 +15,11 @@ from mcp.server.fastmcp import FastMCP
 from . import parse
 from .session import ClickeduSession, LoginError, get_session
 
-mcp = FastMCP("clickedu")
+mcp = FastMCP(
+    "clickedu",
+    host=os.environ.get("CLICKEDU_HTTP_HOST", "127.0.0.1"),
+    port=int(os.environ.get("CLICKEDU_HTTP_PORT", "8791")),
+)
 
 
 def _ok(payload: dict[str, Any]) -> str:
@@ -337,7 +342,15 @@ def list_message_recipients(query: str = "") -> str:
 
 
 def main() -> None:
-    mcp.run()
+    # Default stdio (laptop use). Set CLICKEDU_TRANSPORT=streamable-http to serve
+    # over HTTP at /mcp for the Unraid MCPHub route.
+    transport = os.environ.get("CLICKEDU_TRANSPORT", "stdio")
+    if transport in ("http", "streamable-http"):
+        mcp.run(transport="streamable-http")
+    elif transport == "sse":
+        mcp.run(transport="sse")
+    else:
+        mcp.run()
 
 
 if __name__ == "__main__":
