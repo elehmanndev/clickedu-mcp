@@ -10,10 +10,9 @@ attendance, send one message).
 each on its own subdomain (`https://yourschool.clickedu.eu`). This talks to **your own
 staff account** over the same two-step login the website uses.
 
-It is built to run **on your own machine**. It handles your students' data, so by
-default it runs locally over stdio and keeps your credentials, pass file and session
-cookie on disk next to it. An optional HTTP transport is included if you know what you
-are doing and put it behind your own authentication.
+It is built to run **on your own machine**. It handles your students' data, so it runs
+locally over stdio and keeps your credentials, pass file and session cookie on your own
+disk — nothing is sent anywhere except Clickedu itself.
 
 ## Ethics and scope
 
@@ -24,7 +23,7 @@ are doing and put it behind your own authentication.
   will not be accepted as a contribution.
 - You are responsible for complying with your school's and your country's data rules.
 
-## Quick start (easiest — no Docker, no Cloudflare)
+## Quick start (runs on your laptop)
 
 If you use **Codex CLI**, **Claude Code**, **Cursor**, or any tool that runs a local
 MCP server, this is the whole setup. It runs on your own laptop; your students' data
@@ -125,26 +124,6 @@ The server reads `.env` from its own directory, performs the two-step login
 (username/password, then pass-file upload), reuses the cookie jar, and re-logs in
 automatically when the session expires. Clickedu pages are ISO-8859-15; they are
 decoded before parsing.
-
-## Optional: run over HTTP
-
-If you want to reach it from a remote MCP gateway instead of stdio, set
-`CLICKEDU_TRANSPORT=streamable-http` (see `.env.example`) and run it. It serves at
-`/mcp`. A `Dockerfile` is included for this:
-
-```sh
-docker build -t clickedu-mcp .
-docker run -d --name clickedu-mcp --restart unless-stopped \
-  -p 127.0.0.1:8791:8791 \
-  --env-file /path/to/clickedu.env \
-  -v /path/to/arxiu_de_pas.txt:/secrets/passfile:ro \
-  -v /path/to/cookiedir:/data \
-  clickedu-mcp
-```
-
-This transport has **no authentication of its own** — it exposes your logged-in
-session to anyone who can reach the port. Only run it bound to localhost or behind a
-gateway that authenticates callers, never directly on the public internet.
 
 ## Notes
 

@@ -1,9 +1,0 @@
-.env
-*.env
-secrets/
-.cookies/
-.venv/
-.git/
-__pycache__/
-*.pyc
-.cookies
