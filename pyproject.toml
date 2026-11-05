@@ -1,7 +1,7 @@
 [project]
 name = "clickedu-mcp"
 version = "0.1.0"
-description = "Personal stdio MCP server for a Clickedu teacher account (read + gated write)."
+description = "Local MCP server for Clickedu teachers (read tools + per-action-confirmed writes)."
 requires-python = ">=3.14"
 dependencies = [
     "beautifulsoup4>=4.15.0",

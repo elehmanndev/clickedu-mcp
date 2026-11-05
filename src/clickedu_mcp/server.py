@@ -343,7 +343,8 @@ def list_message_recipients(query: str = "") -> str:
 
 def main() -> None:
     # Default stdio (laptop use). Set CLICKEDU_TRANSPORT=streamable-http to serve
-    # over HTTP at /mcp for the Unraid MCPHub route.
+    # over HTTP at /mcp (e.g. behind a remote MCP gateway). Put it behind auth if
+    # you expose it beyond localhost — it holds your logged-in session.
     transport = os.environ.get("CLICKEDU_TRANSPORT", "stdio")
     if transport in ("http", "streamable-http"):
         mcp.run(transport="streamable-http")

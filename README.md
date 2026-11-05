@@ -1,18 +1,34 @@
 # clickedu-mcp
 
-A personal, local stdio MCP server for one Clickedu teacher account
-(`https://jpif.clickedu.eu`). It runs your daily read workflow from Claude and
-lets you take single, confirmed write actions (attendance, messages).
+A local [MCP](https://modelcontextprotocol.io) server that lets a teacher run their
+**Clickedu** daily workflow from an AI assistant (Claude Desktop, Claude Code, or any
+MCP client): read your schedule, rosters, calendar, session detail, attendance,
+messages and files — and take single, confirmed write actions (mark one student's
+attendance, send one message).
 
-It is built to run **on your own laptop**. It touches your students' data, so it
-never belongs on a shared server. Keep `.env`, the pass file, and the cookie jar
-on the machine you run it from.
+[Clickedu](https://clickedu.eu) is a school management platform used by many schools,
+each on its own subdomain (`https://yourschool.clickedu.eu`). This talks to **your own
+staff account** over the same two-step login the website uses.
 
-## What it does
+It is built to run **on your own machine**. It handles your students' data, so by
+default it runs locally over stdio and keeps your credentials, pass file and session
+cookie on disk next to it. An optional HTTP transport is included if you know what you
+are doing and put it behind your own authentication.
 
-Read tools (return clean JSON):
+## Ethics and scope
 
-| Tool | Page |
+- Use it only with **your own** account and the access your school already grants you.
+- Every write is **one explicit action you confirm in the moment**. There is no bulk
+  mode, no loop over a class, and no scheduled/autonomous run.
+- Student impersonation (Clickedu's `popup_suplantar_alu`) is **not implemented** and
+  will not be accepted as a contribution.
+- You are responsible for complying with your school's and your country's data rules.
+
+## Tools
+
+Read (return clean JSON):
+
+| Tool | Clickedu page |
 | --- | --- |
 | `get_schedule` | `assignatures/el_meu_horari.php` |
 | `get_calendar` | `calendari/index.php` |
@@ -26,56 +42,48 @@ Read tools (return clean JSON):
 | `get_files` | `files/index.php` |
 | `list_message_recipients(query)` | compose directory (read-only) |
 
-Write tools (gated — one explicit action, previewed, then confirmed):
+Write (gated — preview first, then `confirm=true`):
 
 | Tool | Action |
 | --- | --- |
 | `mark_attendance(cgap, sessio, alu_id, absent, reason_code, justified, confirm)` | mark one student present/absent for one session |
 | `send_message(recipient_id, subject, body, confirm)` | send one message to one recipient |
 
-Both write tools return a **preview** and write nothing unless you call them
-again with `confirm=true`. `mark_attendance` re-reads the whole session form and
-flips only the one student, so no one else's attendance is touched; after the
-POST it re-reads the page to verify. There is no bulk mode, no loop over a class,
-no scheduled run, and no student impersonation.
+`mark_attendance` re-reads the whole session form and flips only the one student, so
+no one else's attendance is touched, then re-reads the page to verify the change.
 
-## Setup (on your laptop)
+## Requirements
 
-Requires [uv](https://docs.astral.sh/uv/).
+- [uv](https://docs.astral.sh/uv/) (Python toolchain and runner).
+- Your Clickedu **pass file** (the `arxiu de pas` your school issued you — the file you
+  upload as the second login step).
+
+## Setup
 
 ```sh
+git clone https://github.com/elehmanndev/clickedu-mcp
 cd clickedu-mcp
-cp .env.example .env     # then edit .env
+cp .env.example .env    # then edit .env
+uv sync
 ```
 
-Fill `.env`:
-
-```
-CLICKEDU_BASE_URL=https://jpif.clickedu.eu
-CLICKEDU_USERNAME=your_user
-CLICKEDU_PASSWORD=your_password
-CLICKEDU_ID_USUARI=        # leave blank; scraped on first login
-CLICKEDU_PASSFILE=/absolute/path/to/your/arxiu_de_pas.txt
-CLICKEDU_COOKIE_PATH=.cookies/session.jar
-```
-
-Put your pass file (`arxiu de pas`) somewhere local and point `CLICKEDU_PASSFILE`
-at it. Install and smoke-test login:
+Fill `.env` with your school URL, your login, and the absolute path to your pass file.
+Leave `CLICKEDU_ID_USUARI` blank — it is scraped on first login and printed so you can
+pin it. Confirm login works:
 
 ```sh
-uv sync
 uv run python -c "from clickedu_mcp.session import get_session; get_session(); print('login ok')"
 ```
 
-## Run it from Claude
+## Use it from your assistant
 
-Register it as a stdio MCP server. For Claude Code:
+Register it as a stdio MCP server. Claude Code:
 
 ```sh
 claude mcp add clickedu -- uv --directory /ABSOLUTE/PATH/TO/clickedu-mcp run clickedu-mcp
 ```
 
-Or in a `claude_desktop_config.json` / MCP client config:
+Claude Desktop / other MCP clients (`claude_desktop_config.json`):
 
 ```json
 {
@@ -88,25 +96,45 @@ Or in a `claude_desktop_config.json` / MCP client config:
 }
 ```
 
-The server reads `.env` from its own directory on startup, logs in with the
-two-step flow (username/password, then pass-file upload), reuses the cookie jar,
-and re-logs in automatically when the session expires.
+The server reads `.env` from its own directory, performs the two-step login
+(username/password, then pass-file upload), reuses the cookie jar, and re-logs in
+automatically when the session expires. Clickedu pages are ISO-8859-15; they are
+decoded before parsing.
 
-## Security model
+## Optional: run over HTTP
 
-- Credentials and the pass file live only in local `.env` / disk, never in code
-  or git (`.gitignore` covers `.env`, `secrets/`, `.cookies/`).
-- Pages are ISO-8859-15; they are decoded before parsing.
-- Every write is a single action you confirm in the moment.
-- `popup_suplantar_alu` (student impersonation) is not implemented and never will be.
+If you want to reach it from a remote MCP gateway instead of stdio, set
+`CLICKEDU_TRANSPORT=streamable-http` (see `.env.example`) and run it. It serves at
+`/mcp`. A `Dockerfile` is included for this:
 
-## Status notes
+```sh
+docker build -t clickedu-mcp .
+docker run -d --name clickedu-mcp --restart unless-stopped \
+  -p 127.0.0.1:8791:8791 \
+  --env-file /path/to/clickedu.env \
+  -v /path/to/arxiu_de_pas.txt:/secrets/passfile:ro \
+  -v /path/to/cookiedir:/data \
+  clickedu-mcp
+```
 
-- Read tools are validated end to end against the live site.
-- `get_inbox`/`get_chat_contacts`/`get_documents` reflect that, for this account,
-  Communication is a broadcast hub and the chat/document modules are JSON SPAs
-  that are currently empty; each returns a clear `note`.
-- Write tools are validated through their preview path against live data. The
-  real POST for `send_message` (recipient packing + CSRF token) should be
-  confirmed on a first send to yourself; adjust `accio`/recipient field if the
-  server rejects it.
+This transport has **no authentication of its own** — it exposes your logged-in
+session to anyone who can reach the port. Only run it bound to localhost or behind a
+gateway that authenticates callers, never directly on the public internet.
+
+## Notes
+
+- Parsers were validated against one school's Clickedu instance. The login flow and
+  page structure are shared across Clickedu, but if a page parses empty on your school,
+  open an issue with the (redacted) HTML and it can be adjusted.
+- `get_inbox` / `get_chat_contacts` / `get_documents` return a status `note` when a
+  module is a broadcast hub or a JSON SPA with nothing to show for your account.
+
+## Contributing
+
+PRs welcome, with one rule: you are the author of what you submit and can explain and
+have run it. Keep secrets out of code, tests and fixtures. Do not add bulk writes,
+autonomous runs, or impersonation.
+
+## License
+
+MIT — see [LICENSE](LICENSE).

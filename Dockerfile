@@ -1,4 +1,4 @@
-# clickedu-mcp served over streamable-http for the Unraid MCPHub route.
+# clickedu-mcp served over streamable-http (for use behind a remote MCP gateway).
 FROM ghcr.io/astral-sh/uv:bookworm-slim
 WORKDIR /app
 ENV UV_LINK_MODE=copy \
