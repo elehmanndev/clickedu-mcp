@@ -15,11 +15,7 @@ from mcp.server.fastmcp import FastMCP
 from . import parse
 from .session import ClickeduSession, LoginError, get_session
 
-mcp = FastMCP(
-    "clickedu",
-    host=os.environ.get("CLICKEDU_HTTP_HOST", "127.0.0.1"),
-    port=int(os.environ.get("CLICKEDU_HTTP_PORT", "8791")),
-)
+mcp = FastMCP("clickedu")
 
 
 def _ok(payload: dict[str, Any]) -> str:
@@ -363,16 +359,8 @@ def main() -> None:
         )
         raise SystemExit(2)
 
-    # Default stdio (laptop use). Set CLICKEDU_TRANSPORT=streamable-http to serve
-    # over HTTP at /mcp (e.g. behind a remote MCP gateway). Put it behind auth if
-    # you expose it beyond localhost — it holds your logged-in session.
-    transport = os.environ.get("CLICKEDU_TRANSPORT", "stdio")
-    if transport in ("http", "streamable-http"):
-        mcp.run(transport="streamable-http")
-    elif transport == "sse":
-        mcp.run(transport="sse")
-    else:
-        mcp.run()
+    # Local stdio server, launched by the MCP client (Codex, Claude Code, ...).
+    mcp.run()
 
 
 if __name__ == "__main__":

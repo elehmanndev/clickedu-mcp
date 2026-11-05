@@ -2,7 +2,7 @@
 
 A teacher runs `clickedu-mcp setup` once. It writes everything to
 ``~/.clickedu-mcp/`` so the MCP server (launched later with no terminal) can read
-it. Environment variables still win, so the Docker/env deployment is unaffected.
+it. Environment variables still take precedence over this file.
 """
 from __future__ import annotations
 
