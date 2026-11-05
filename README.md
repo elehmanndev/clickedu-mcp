@@ -24,6 +24,31 @@ are doing and put it behind your own authentication.
   will not be accepted as a contribution.
 - You are responsible for complying with your school's and your country's data rules.
 
+## Quick start (easiest — no Docker, no Cloudflare)
+
+If you use **Codex CLI**, **Claude Code**, **Cursor**, or any tool that runs a local
+MCP server, this is the whole setup. It runs on your own laptop; your students' data
+never leaves your machine.
+
+Install [uv](https://docs.astral.sh/uv/) (one line — see its site), then:
+
+```sh
+# 1) one-time: enter your school URL, login and pass file
+uvx --from git+https://github.com/elehmanndev/clickedu-mcp clickedu-mcp setup
+
+# 2) add it to Codex (one line)
+codex mcp add clickedu -- uvx --from git+https://github.com/elehmanndev/clickedu-mcp clickedu-mcp
+```
+
+`setup` stores everything under `~/.clickedu-mcp/` and tests your login before you
+finish. For Claude Code the second line is
+`claude mcp add clickedu -- uvx --from git+https://github.com/elehmanndev/clickedu-mcp clickedu-mcp`.
+For Claude Desktop / Cursor, use the same command/args in their MCP config.
+
+> ChatGPT and the Codex cloud connector only accept *remote* MCP servers over OAuth,
+> which cannot run locally like this. Local MCP (above) is the simple path; a remote
+> deployment is far more involved and is out of scope for most teachers.
+
 ## Tools
 
 Read (return clean JSON):

@@ -342,6 +342,27 @@ def list_message_recipients(query: str = "") -> str:
 
 
 def main() -> None:
+    import sys
+
+    if len(sys.argv) > 1 and sys.argv[1] == "setup":
+        from .config import setup
+
+        raise SystemExit(setup())
+
+    # If no credentials are configured yet, guide the user instead of crashing
+    # cryptically when the MCP client launches us.
+    if not os.environ.get("CLICKEDU_USERNAME"):
+        from .config import config_env_path
+
+        print(
+            "clickedu-mcp is not configured yet.\n"
+            "Run the one-time setup first:\n"
+            "  clickedu-mcp setup\n"
+            f"(it writes {config_env_path()})",
+            file=sys.stderr,
+        )
+        raise SystemExit(2)
+
     # Default stdio (laptop use). Set CLICKEDU_TRANSPORT=streamable-http to serve
     # over HTTP at /mcp (e.g. behind a remote MCP gateway). Put it behind auth if
     # you expose it beyond localhost — it holds your logged-in session.
