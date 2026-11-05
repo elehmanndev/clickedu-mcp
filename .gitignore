@@ -1,0 +1,16 @@
+# Secrets and session state — never commit
+.env
+*.env
+cookies.jar
+passfile*
+secrets/
+.cookies/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.uv/
+dist/
+build/
+*.egg-info/
