@@ -133,13 +133,27 @@ decoded before parsing.
 - `get_inbox` / `get_chat_contacts` / `get_documents` return a status `note` when a
   module is a broadcast hub or a JSON SPA with nothing to show for your account.
 
-## Agent skill
+## Agent skills
 
-`skills/clickedu/SKILL.md` ships an Agent Skill that teaches the assistant the
-common teacher workflows on top of the raw tools: taking attendance for a session
-(with the preview-then-confirm step), looking up rosters / sessions / per-student
-info, and messaging a family. Clients that support skills (Claude Code, Codex,
-Cursor) pick it up from the repo.
+`skills/` ships one Agent Skill per teacher task, so the assistant is triggered by
+what a teacher actually says (in Catalan and Spanish) and knows the right tool
+chain and guardrails. Clients that support skills (Claude Code, Codex, Cursor)
+pick them up from the repo.
+
+| Skill | Teacher says | Covers |
+| --- | --- | --- |
+| `clickedu-assistencia` | passar llista · pasar lista · marcar falta · qui ha faltat | read attendance + mark absent/present (preview → confirm) |
+| `clickedu-retards` | posar un retard · marcar retraso/tardanza · ha arribat tard | mark late (preview → confirm) |
+| `clickedu-horari` | el meu horari · mi horario · què tinc avui | the weekly schedule |
+| `clickedu-classes` | les meves classes · mis alumnos · llista de classe | subjects and class rosters |
+| `clickedu-sessio` | la sessió de · què toca · contingut de la sessió | one session's detail |
+| `clickedu-missatges` | enviar missatge a família · avisar a | send one message (preview → confirm) |
+| `clickedu-safata` | missatges rebuts · mi bandeja · xat | read inbox and chat contacts |
+| `clickedu-calendari` | calendari · eventos | calendar events |
+| `clickedu-documents` | documents · arxius · ficheros | documents and files |
+
+Write skills (`clickedu-assistencia`, `clickedu-retards`, `clickedu-missatges`)
+encode the per-action preview-then-confirm and the no-bulk / no-impersonation rules.
 
 ## Contributing
 
