@@ -92,8 +92,8 @@ def get_session_detail(assig: str, sessio: str) -> str:
 
 @mcp.tool()
 def get_attendance(cgap: str, sessio: str, n: int = 0) -> str:
-    """Read the CURRENT attendance state for one session: each student and whether
-    they are currently marked absent, the reason, and justified flag. cgap and
+    """Read the CURRENT attendance state for one session: each student with their
+    status (present / absent / late), reason, and justified flag. cgap and
     sessio come from the attendance_link in get_session_detail
     (assistencia/index.php?cgap=...&sessio=...&n=...). Read-only."""
     c, se = str(cgap).strip(), str(sessio).strip()
@@ -155,24 +155,29 @@ def mark_attendance(
     cgap: str,
     sessio: str,
     alu_id: str,
-    absent: bool = True,
+    status: str = "absent",
     reason_code: str = "",
     justified: bool = False,
     confirm: bool = False,
 ) -> str:
-    """Mark ONE student present/absent for ONE session. Single action only.
+    """Set ONE student's attendance for ONE session. Single action only.
 
     Without confirm=True this returns a PREVIEW of the exact change and does not
     write anything. Call again with confirm=True only after the teacher approves.
     It replays every other student's current state unchanged and flips only this
     student, so no one else's attendance is touched.
 
-    absent=True marks absent, absent=False clears the absence.
-    reason_code is the absence motive code (e.g. 10=MALALT, 11=METGE, 12=GESTIONS).
+    status is "absent", "late" (retard), or "present" (clears any absence/late).
+    reason_code is the motive code for absent/late (e.g. 10=MALALT, 11=METGE,
+    12=GESTIONS). justified marks an absent/late as justified.
     """
     c, se, alu = str(cgap).strip(), str(sessio).strip(), str(alu_id).strip()
     if not (c.isdigit() and se.isdigit() and alu.isdigit()):
         return _err("cgap, sessio and alu_id must be numeric.")
+    status = status.strip().lower()
+    _radio = {"absent": "1", "late": "2"}
+    if status not in ("absent", "late", "present"):
+        return _err('status must be "absent", "late" or "present".')
     s = _s()
     q = f"assistencia/index.php?cgap={c}&sessio={se}"
     try:
@@ -196,12 +201,13 @@ def mark_attendance(
     data = parse.collect_form_state(html, "assistencia/index.php")
     data["action"] = "guardar_assistencies"
     before = {
-        "absent": target["absent"],
+        "status": target["status"],
         "reason": target["reason"],
         "justified": target["justified"],
     }
-    if absent:
-        data[rbtn] = "1"
+    val = _radio.get(status)  # "1" absent, "2" late, None present
+    if val:
+        data[rbtn] = val
         if reason_code:
             data[motiu] = str(reason_code)
         if justified:
@@ -220,9 +226,9 @@ def mark_attendance(
         "change": {
             "before": before,
             "after": {
-                "absent": absent,
+                "status": status,
                 "reason_code": reason_code or None,
-                "justified": justified if absent else False,
+                "justified": justified if val else False,
             },
         },
         "endpoint": q,
@@ -239,7 +245,7 @@ def mark_attendance(
     # Verify by re-reading the state.
     after_state = parse.parse_attendance_state(s.get(q))
     now = next((st for st in after_state["students"] if st["alu_id"] == alu), None)
-    verified = bool(now and now["absent"] == absent)
+    verified = bool(now and now["status"] == status)
     preview.update(
         {
             "applied": True,
