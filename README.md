@@ -133,6 +133,14 @@ decoded before parsing.
 - `get_inbox` / `get_chat_contacts` / `get_documents` return a status `note` when a
   module is a broadcast hub or a JSON SPA with nothing to show for your account.
 
+## Agent skill
+
+`skills/clickedu/SKILL.md` ships an Agent Skill that teaches the assistant the
+common teacher workflows on top of the raw tools: taking attendance for a session
+(with the preview-then-confirm step), looking up rosters / sessions / per-student
+info, and messaging a family. Clients that support skills (Claude Code, Codex,
+Cursor) pick it up from the repo.
+
 ## Contributing
 
 PRs welcome, with one rule: you are the author of what you submit and can explain and
