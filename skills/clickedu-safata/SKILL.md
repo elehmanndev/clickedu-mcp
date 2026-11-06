@@ -1,5 +1,6 @@
 ---
 name: clickedu-safata
+allowed-tools: [mcp__clickedu__get_inbox, mcp__clickedu__get_chat_contacts]
 description: >-
   Veure els missatges rebuts i els contactes de xat a Clickedu. Usa-la quan el
   profe digui "missatges rebuts / mensajes recibidos", "la meva safata / mi

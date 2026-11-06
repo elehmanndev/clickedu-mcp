@@ -1,5 +1,6 @@
 ---
 name: clickedu-retards
+allowed-tools: [mcp__clickedu__get_schedule, mcp__clickedu__get_session_detail, mcp__clickedu__get_attendance, mcp__clickedu__mark_attendance]
 description: >-
   Marcar retards (arribades tard) a Clickedu. Usa-la quan el profe digui "posar un
   retard", "marcar retard", "poner un retraso / una tardanza", "ha arribat tard /
@@ -9,16 +10,14 @@ description: >-
 
 # Retards (arribades tard)
 
-Mateixa mecànica que l'assistència, però marcant **retard** en comptes de falta.
-**Sempre confirmat pel profe, un alumne cada cop, mai bulk.**
+Mateixa mecànica que l'assistència, però marcant **`status="late"`**.
+**Sempre confirmat pel profe, un alumne cada cop, mai bulk, mai suplantar.**
 
-1. `get_schedule` → sessió d'avui → `session_link` (`assig`, `sessio`).
-2. `get_session_detail(assig, sessio)` → `attendance_link` (`cgap`, `sessio`, `n`).
-3. `get_attendance(cgap, sessio, n)` → troba l'alumne (`alu_id`, `name`, `status`).
-4. `mark_attendance(cgap, sessio, alu_id, status="late", reason_code, justified, confirm)`:
-   - Primer **sense** `confirm` → vista prèvia; ensenya-la i **espera el sí**.
-   - Després `confirm=true`; rellegeix i comprova `verified`.
-   - `reason_code` opcional (`10` MALALT, `11` METGE, `12` GESTIONS);
-     `justified=true` el justifica. `status="present"` treu el retard.
+Flux: `get_schedule` → `get_session_detail` → `get_attendance` →
+`mark_attendance(..., status="late", confirm=...)`, en **dos passos**: primer
+sense `confirm` (vista prèvia, espera el sí), després `confirm=true`.
+`status="present"` treu el retard.
 
-Per faltes/absències (no retard) usa `clickedu-assistencia`.
+Cadena d'IDs, codis de motiu i protocol complet:
+[`references/attendance.md`](references/attendance.md). Per faltes/absències, usa
+`clickedu-assistencia`.

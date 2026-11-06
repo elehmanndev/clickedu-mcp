@@ -1,5 +1,6 @@
 ---
 name: clickedu-calendari
+allowed-tools: [mcp__clickedu__get_calendar]
 description: >-
   El calendari de Clickedu. Usa-la quan el profe digui "calendari / calendario",
   "esdeveniments / eventos", "què hi ha al calendari / qué hay en el calendario",
