@@ -1,5 +1,6 @@
 ---
 name: clickedu-classes
+allowed-tools: [mcp__clickedu__get_subjects_and_rosters, mcp__clickedu__get_roster]
 description: >-
   Les meves classes i alumnes a Clickedu. Usa-la quan el profe digui "les meves
   classes / mis clases", "els meus alumnes / mis alumnos", "llista de classe /

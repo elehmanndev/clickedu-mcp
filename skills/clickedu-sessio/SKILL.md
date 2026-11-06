@@ -1,5 +1,6 @@
 ---
 name: clickedu-sessio
+allowed-tools: [mcp__clickedu__get_schedule, mcp__clickedu__get_session_detail]
 description: >-
   El detall d'una sessió de classe a Clickedu. Usa-la quan el profe digui "la
   sessió de / la sesión de", "què toca a / qué toca en", "el contingut de la

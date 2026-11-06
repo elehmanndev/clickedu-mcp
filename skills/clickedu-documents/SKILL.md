@@ -1,5 +1,6 @@
 ---
 name: clickedu-documents
+allowed-tools: [mcp__clickedu__get_documents, mcp__clickedu__get_files]
 description: >-
   Documents i arxius a Clickedu. Usa-la quan el profe digui "documents /
   documentos", "arxius / archivos", "fitxers / ficheros", "els meus documents / mis

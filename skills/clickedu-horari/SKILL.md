@@ -1,5 +1,6 @@
 ---
 name: clickedu-horari
+allowed-tools: [mcp__clickedu__get_schedule]
 description: >-
   El meu horari de classes a Clickedu. Usa-la quan el profe digui "el meu horari",
   "mi horario", "què tinc avui / qué clases tengo hoy", "a quina hora tinc",

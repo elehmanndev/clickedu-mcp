@@ -159,7 +159,8 @@ encode the per-action preview-then-confirm and the no-bulk / no-impersonation ru
 
 PRs welcome, with one rule: you are the author of what you submit and can explain and
 have run it. Keep secrets out of code, tests and fixtures. Do not add bulk writes,
-autonomous runs, or impersonation.
+autonomous runs, or impersonation. See [AGENTS.md](AGENTS.md) for the tool and skill
+conventions.
 
 ## License
 

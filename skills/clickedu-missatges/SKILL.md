@@ -1,5 +1,6 @@
 ---
 name: clickedu-missatges
+allowed-tools: [mcp__clickedu__list_message_recipients, mcp__clickedu__send_message]
 description: >-
   Enviar un missatge a una família o contacte per Clickedu. Usa-la quan el profe
   digui "enviar missatge a família / mandar mensaje a la familia", "avisar a / avisa
@@ -11,12 +12,9 @@ description: >-
 **Un destinatari, un missatge, sempre confirmat pel profe.** Res d'enviaments
 massius ni bucles.
 
-1. `list_message_recipients(query)` → troba el destinatari; usa un tros del nom per
-   filtrar. Cada resultat té un `id` (p. ex. `u_1610`); una adreça de correu també
-   serveix.
-2. `send_message(recipient_id, subject, body, confirm)`:
-   - Primer **sense** `confirm`: retorna la vista prèvia (destinatari resolt,
-     assumpte, cos). Ensenya-la i **espera el sí** del profe.
-   - Després `confirm=true` per enviar-lo.
+Flux: `list_message_recipients(query)` → tria el destinatari → `send_message`, en
+**dos passos**: primer sense `confirm` (vista prèvia del destinatari/assumpte/cos,
+ensenya-la i espera el sí), després `confirm=true`.
 
-No enviïs mai a un grup sencer ni iteris sobre destinataris.
+Detall (format del destinatari, protocol de confirmació):
+[`references/messaging.md`](references/messaging.md).
