@@ -29,16 +29,16 @@ Chain the IDs, do not guess them:
    (`assistencia/index.php?cgap=<cgap>&sessio=<sessio>&n=<n>`).
 3. `get_attendance(cgap, sessio, n)` → the current state: each student with
    `alu_id`, `name`, `status` (present / absent / late), reason, justified.
-4. `mark_attendance(cgap, sessio, alu_id, absent, reason_code, justified, confirm)`
+4. `mark_attendance(cgap, sessio, alu_id, status, reason_code, justified, confirm)`
    — **one student at a time.**
    - Call it first **without** `confirm` (or `confirm=false`): it returns a
      preview of the exact change (before → after) and writes nothing.
    - Show that preview to the teacher and **wait for an explicit yes**.
    - Only then call again with `confirm=true`. It re-reads the page and reports
      `verified`.
-   - `absent=true` marks absent, `absent=false` clears it. `reason_code`:
-     `10` = MALALT (ill), `11` = METGE (doctor), `12` = GESTIONS. `justified=true`
-     marks the absence justified.
+   - `status` is `"absent"`, `"late"` (retard), or `"present"` (clears any
+     absence/late). `reason_code` for absent/late: `10` = MALALT (ill),
+     `11` = METGE (doctor), `12` = GESTIONS. `justified=true` marks it justified.
 
 If the teacher says "mark the whole class / everyone absent", refuse the bulk
 action and do them one confirmed student at a time, or ask them to name the
