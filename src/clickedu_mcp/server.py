@@ -345,8 +345,9 @@ def mark_attendance(
 
     # Full current form state of the attendance form, then flip only this student.
     data = parse.collect_form_state(html, form_name="frm_assistencia")
-    if not any(k.startswith("rbtn_ar_") for k in data):
-        return _err("Could not read the attendance form; nothing was changed.")
+    problem = parse.check_session_form(html, data)
+    if problem:
+        return _err(f"Could not read the attendance form ({problem}); nothing was changed.")
     data["action"] = "guardar_assistencies"
     data["boto_guardar"] = "guardar"  # what the page's Guardar button adds
     data["menu_triat"] = ""  # main Assistència view
@@ -445,8 +446,9 @@ def _apply_session_change(c: str, se: str, alu: str, apply, describe: dict,
         return _err(f"Student {alu} not found in this session. Available: "
                     + ", ".join(f'{x["alu_id"]}={x["name"]}' for x in page["students"][:40]))
     data = parse.collect_form_state(html, form_name="frm_assistencia")
-    if not any(k.startswith("rbtn_ar_") for k in data):
-        return _err("Could not read the session form; nothing was changed.")
+    problem = parse.check_session_form(html, data)
+    if problem:
+        return _err(f"Could not read the session form ({problem}); nothing was changed.")
     data["action"] = "guardar_assistencies"
     data["boto_guardar"] = "guardar"
     data["menu_triat"] = ""
@@ -617,21 +619,34 @@ def add_tutor_conversation(
 
     The 'Notificar als participants' box is NEVER ticked: nobody is emailed.
 
+    text may be Markdown (e.g. a Granola summary): it is converted to plain text,
+    because Clickedu shows the message literally. Headings, paragraphs, line
+    breaks and list items are kept; #, ** and other markers are removed. The
+    preview shows the exact text that will be saved.
+
     participants: who took part, matched against the names or roles on the form
     ("alumne", "pare", "mare", or a name). Omit it to tick everyone listed (the
     student and every linked parent); the preview shows who is ticked.
 
     Without confirm=True it returns a PREVIEW (student, participants, title, text)
     and saves nothing. Call again with confirm=True only after the teacher
-    approves. alu_id comes from get_roster of the tutor's class."""
+    approves. After saving it re-reads the new conversation and checks title,
+    message (accents included) and participants. alu_id comes from get_roster of
+    the tutor's class."""
+    from .session import _to_latin9
+
     alu = str(alu_id).strip()
     if not alu.isdigit():
         return _err("alu_id must be numeric.")
-    title, text = (title or "").strip(), (text or "").strip()
+    title = parse.markdown_to_plain(title or "").replace("\n", " ").strip()
+    text = parse.markdown_to_plain(text or "")
     if not title or not text:
         return _err("title and text are both required.")
     if len(title) > 255:
         return _err("title is longer than 255 characters.")
+    # What Clickedu can store (ISO-8859-15): curly quotes become straight ones,
+    # unsupported symbols become '?'. Shown in the preview and used to verify.
+    title, text = _to_latin9(title), _to_latin9(text)
     s = _s()
     form_path = f"assignatures/conversa_tutor.php?accio=crear&alum={alu}"
     try:
@@ -648,16 +663,15 @@ def add_tutor_conversation(
     people = form["participants"]
     if not people:
         return _err("The form lists no participants for this student.")
+
+    def matches(p, w):
+        return (w in p["name"].lower() or w == p["role"].lower()
+                or (w in ("alumne", "alumna", "alumno", "student") and p["is_student"]))
+
     if participants:
         wanted = [p.strip().lower() for p in participants if p and p.strip()]
-        chosen = [p for p in people
-                  if any(w in p["name"].lower() or w == p["role"].lower()
-                         or (w in ("alumne", "alumna", "alumno", "student") and p["is_student"])
-                         for w in wanted)]
-        missing = [w for w in wanted
-                   if not any(w in p["name"].lower() or w == p["role"].lower()
-                              or (w in ("alumne", "alumna", "alumno", "student") and p["is_student"])
-                              for p in people)]
+        chosen = [p for p in people if any(matches(p, w) for w in wanted)]
+        missing = [w for w in wanted if not any(matches(p, w) for p in people)]
         if missing:
             return _err(f"No participant matches {missing}. On the form: "
                         + ", ".join(f'{p["name"]} ({p["role"]})' for p in people))
@@ -666,7 +680,8 @@ def add_tutor_conversation(
     data = dict(form["hidden"])
     for p in chosen:
         data[p["field"]] = "1"
-    # The notify box is deliberately never sent (unticked).
+    if form.get("notify_field"):
+        data.pop(form["notify_field"], None)  # never ticked: nobody is emailed
     data[form["title_field"]] = title
     data[form["text_field"]] = text
     if form.get("submit"):
@@ -678,29 +693,50 @@ def add_tutor_conversation(
         "participants": [f'{p["name"]} ({p["role"]})' for p in chosen],
         "not_ticked": [f'{p["name"]} ({p["role"]})' for p in people if p not in chosen],
         "notify_participants": False,
+        "notify_field_sent": bool(form.get("notify_field") and form["notify_field"] in data),
         "title": title,
         "text": text,
     }
     if not confirm:
         preview["note"] = "PREVIEW only. Nothing saved. Call again with confirm=true to save."
         return _ok(preview)
+    action = form["action"] or ""
+    if not action.startswith("conversa_tutor.php?accio=insert_bd"):
+        return _err(f"Unexpected form action {action!r}; nothing was saved.")
     list_path = f"assignatures/fitxa_alumne.php?alum={alu}&p=comunicacio"
     try:
-        before = parse.parse_tutor_conversations(s.get(list_path))
-        action = form["action"] or ""
-        if not action.startswith("conversa_tutor.php?accio=insert_bd"):
-            return _err(f"Unexpected form action {action!r}; nothing was saved.")
+        before_ids = set(re.findall(r"conversa_tutor\.php\?accio=llegir&(?:amp;)?id=(\d+)", s.get(list_path)))
         s.post("assignatures/" + action, data=data)  # relative to assignatures/
-        after_html = s.get(list_path)
+        after_ids = set(re.findall(r"conversa_tutor\.php\?accio=llegir&(?:amp;)?id=(\d+)", s.get(list_path)))
+        new_ids = sorted(after_ids - before_ids, key=int)
+        saved = None
+        if len(new_ids) == 1:
+            saved = parse.parse_tutor_conversation(
+                s.get(f"assignatures/conversa_tutor.php?accio=llegir&id={new_ids[0]}"))
     except LoginError as e:
         return _err(str(e))
-    after = parse.parse_tutor_conversations(after_html)
-    verified = after["count"] > before["count"] or (
-        before["none_message"] and not after["none_message"] and title in after_html)
+    checks = {"created": len(new_ids) == 1}
+    if saved and saved.get("found"):
+        norm = lambda v: re.sub(r"\s+", " ", v or "").strip()
+        checks["title_matches"] = norm(saved["title"]) == norm(title)
+        checks["text_matches"] = bool(saved["messages"]) and norm(saved["messages"][0]) == norm(text)
+        checks["no_mojibake"] = not re.search(r"Ã.|Â.", (saved["title"] or "") + "".join(saved["messages"]))
+        want = sorted(p["name"] for p in chosen)
+        got = sorted(saved["participants"])
+        checks["participants_match"] = all(any(w in g or g in w for g in got) for w in want) and len(got) == len(want)
+        preview["saved"] = {"conversation_id": new_ids[0], **saved}
+    verified = all(checks.values()) and len(checks) > 1
     preview.update({
         "applied": True,
-        "verified": bool(verified),
-        "note": None if verified else "Sent, but the conversation does not appear yet in the student's file. Check it in Clickedu.",
+        "verified": verified,
+        "checks": checks,
+        "notify_note": ("Notificar als participants was not ticked in the request. "
+                        "Clickedu does not show it on the saved conversation, so this is "
+                        "checked on what was sent, not on the result."),
+        "note": None if verified else (
+            "Saved, but some checks failed (see checks). Review it in Clickedu."
+            if checks.get("created") else
+            "Sent, but no new conversation appeared in the student's file. Check it in Clickedu."),
     })
     return _ok(preview)
 

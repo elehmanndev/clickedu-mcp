@@ -199,6 +199,81 @@ def parse_tutor_conversation_form(html: str) -> dict:
     }
 
 
+def markdown_to_plain(md: str) -> str:
+    """Turn Markdown (e.g. a Granola meeting summary) into readable plain text
+    for a Clickedu textarea, which shows characters literally: headings keep
+    their text on their own line, ** / __ / * / _ / ` / ~~ emphasis markers are
+    removed, links keep 'text (url)', list items keep a '- ' or 'n. ' marker
+    (nesting kept with two spaces), paragraphs and line breaks are preserved,
+    and runs of blank lines collapse to one."""
+    text = (md or "").replace("\r\n", "\n").replace("\r", "\n")
+    out = []
+    for raw in text.split("\n"):
+        line = raw.rstrip()
+        if re.fullmatch(r"\s*([-*_])(\s*\1){2,}\s*", line):  # horizontal rule
+            out.append("")
+            continue
+        line = re.sub(r"^\s{0,3}#{1,6}\s+", "", line)  # heading marker
+        line = re.sub(r"\s+#+\s*$", "", line)  # closing heading hashes
+        line = re.sub(r"^(\s*)>\s?", r"\1", line)  # blockquote
+        m = re.match(r"^(\s*)[-*+]\s+(?:\[[ xX]\]\s+)?(.*)$", line)  # bullet / task
+        if m:
+            line = "  " * (len(m.group(1).expandtabs(2)) // 2) + "- " + m.group(2)
+        else:
+            m = re.match(r"^(\s*)(\d+)[.)]\s+(.*)$", line)  # numbered
+            if m:
+                line = "  " * (len(m.group(1).expandtabs(2)) // 2) + f"{m.group(2)}. {m.group(3)}"
+        line = re.sub(r"!\[([^\]]*)\]\(([^)]+)\)", r"\1 (\2)", line)  # image
+        line = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r"\1 (\2)", line)  # link
+        line = re.sub(r"`+([^`]*)`+", r"\1", line)  # code
+        line = re.sub(r"(\*\*|__)(.+?)\1", r"\2", line)  # bold
+        line = re.sub(r"(?<![\w*])\*(?!\s)(.+?)(?<!\s)\*(?![\w*])", r"\1", line)  # italic *
+        line = re.sub(r"(?<![\w_])_(?!\s)(.+?)(?<!\s)_(?![\w_])", r"\1", line)  # italic _
+        line = re.sub(r"~~(.+?)~~", r"\1", line)  # strikethrough
+        line = line.replace("**", "").replace("__", "")  # leftover unmatched
+        out.append(line)
+    plain = "\n".join(out)
+    plain = re.sub(r"\n{3,}", "\n\n", plain)
+    return plain.strip()
+
+
+def parse_tutor_conversation(html: str) -> dict:
+    """One saved tutor conversation (conversa_tutor.php?accio=llegir&id=...):
+    tutor, participants, title, date and the messages with their text (line
+    breaks kept). The page does not show whether participants were notified."""
+    soup = _soup(html)
+    form = soup.find("form", attrs={"name": "frm_conv"})
+    if form is None:
+        return {"found": False}
+    fields: dict[str, str] = {}
+    participants: list[str] = []
+    for tr in form.find_all("tr"):
+        tds = tr.find_all("td")
+        if len(tds) < 2:
+            continue
+        key = _clean(tds[0].get_text(" ")).split(":")[0].lower()
+        if key.startswith("participants"):
+            participants = [_clean(x.get_text(" ")) for x in tds[1].find_all("div") if _clean(x.get_text())]
+        elif key in ("tutor/a", "titol", "títol", "data i hora", "classe"):
+            fields[key] = _clean(tds[1].get_text(" "))
+    messages = []
+    for body in form.find_all("div", class_="PerSobre"):
+        for br in body.find_all("br"):
+            br.replace_with("\n")
+        text = "\n".join(line.strip() for line in body.get_text().split("\n")).strip()
+        if text:
+            messages.append(text)
+    return {
+        "found": True,
+        "tutor": fields.get("tutor/a"),
+        "title": fields.get("titol") or fields.get("títol"),
+        "date": fields.get("data i hora"),
+        "class": fields.get("classe"),
+        "participants": [re.sub(r"\s*\(\)\s*$", "", p) for p in participants],
+        "messages": messages,
+    }
+
+
 def parse_tutor_conversations(html: str) -> dict:
     """The 'Converses del tutor' list in the student file (p=comunicacio)."""
     soup = _soup(html)
@@ -216,6 +291,33 @@ def parse_tutor_conversations(html: str) -> dict:
             break
     empty = "No hi ha cap conversa" in soup.get_text()
     return {"conversations": convs, "count": len(convs), "none_message": empty}
+
+
+def check_session_form(html: str, data: dict) -> str | None:
+    """Make sure the replayed session form is the real, complete attendance form
+    before writing it back. Checks structure, not state: a session where every
+    student is present has no checked attendance radio, and that is valid.
+
+    Returns None if it is safe to replay, or a reason to refuse."""
+    soup = _soup(html)
+    form = soup.find("form", attrs={"name": "frm_assistencia"})
+    if form is None:
+        return "the attendance form (frm_assistencia) is not on the page"
+    radio_students = {
+        (el.get("name") or "").split("_")[-1]
+        for el in form.find_all("input", attrs={"type": "radio"})
+        if (el.get("name") or "").startswith("rbtn_ar_")
+    }
+    if not radio_students:
+        return "the attendance form has no student rows"
+    if data.get("action") != "guardar_assistencies":
+        return "the form's hidden action is not guardar_assistencies"
+    # every student row's always-sent fields must be in the replay
+    missing = [a for a in radio_students if f"hid_del_noid_{a}" not in data
+               and not any(k.startswith("hid_del_") and k.endswith(f"_{a}") for k in data)]
+    if missing:
+        return f"the replay is missing {len(missing)} student rows"
+    return None
 
 
 HOMEWORK = {"1": "fets", "2": "no fets", "3": "no demanats"}

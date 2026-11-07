@@ -157,7 +157,16 @@ class ClickeduSession:
         return html
 
     def post(self, path: str, *, data=None, files=None, **kw) -> str:
-        """POST (for write tools). Re-login once if expired, then retry the POST."""
+        """POST (for write tools). Re-login once if expired, then retry the POST.
+
+        Form data is encoded as ISO-8859-15, like a browser does on Clickedu's
+        ISO-8859-15 pages. Encoding it as UTF-8 (curl_cffi's default) makes
+        Clickedu store 'reunió' as 'reuniÃ³'."""
+        if data is not None and files is None and not isinstance(data, (str, bytes)):
+            data = encode_form(data)
+            hdrs = dict(kw.pop("headers", None) or {})
+            hdrs.setdefault("Content-Type", "application/x-www-form-urlencoded")
+            kw["headers"] = hdrs
         with self._lock:
             r = self._s.post(self._url(path), data=data, files=files, allow_redirects=True, **kw)
             html = self._text(r)
@@ -175,6 +184,31 @@ class ClickeduSession:
     @property
     def id_usuari(self) -> str:
         return self._id_usuari
+
+
+def _to_latin9(value: str) -> str:
+    """Make a value representable in ISO-8859-15. Typographic characters that
+    the charset lacks (curly quotes, dashes, ellipsis, bullets, nbsp) become their
+    plain equivalents; anything else unrepresentable becomes '?' rather than
+    being stored as garbage."""
+    table = {
+        "‘": "'", "’": "'", "‚": "'", "′": "'",
+        "“": '"', "”": '"', "„": '"', "″": '"',
+        "–": "-", "—": "-", "−": "-",
+        "…": "...", "•": "-", " ": " ", " ": " ",
+    }
+    value = "".join(table.get(ch, ch) for ch in value)
+    return value.encode(ENCODING, errors="replace").decode(ENCODING)
+
+
+def encode_form(data) -> bytes:
+    """URL-encode form fields as ISO-8859-15 bytes, the way a browser submits a
+    form on an ISO-8859-15 page. Accepts a dict or a list of (name, value) pairs."""
+    from urllib.parse import urlencode
+
+    pairs = data.items() if isinstance(data, dict) else data
+    clean = [(str(k), _to_latin9(str(v))) for k, v in pairs]
+    return urlencode(clean, encoding=ENCODING).encode("ascii")
 
 
 def _scrape_id_usuari(html: str) -> str:
