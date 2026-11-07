@@ -741,6 +741,124 @@ def add_tutor_conversation(
     return _ok(preview)
 
 
+def _justify_url(alu: str, d_from: str, d_to: str) -> str:
+    return (f"assignatures/assistencia.php?p=justificar_bloc&alum={alu}"
+            f"&ini={d_from.replace('-', '')}&fi={d_to.replace('-', '')}"
+            "&r=a&v=assignatures_at&mst=0")
+
+
+@mcp.tool()
+def justify_absences(
+    alu_id: str,
+    date_from: str,
+    date_to: str = "",
+    record_ids: list[str] | None = None,
+    note: str = "",
+    confirm: bool = False,
+) -> str:
+    """Justify ONE student's unjustified absences and lates in a date range, the
+    way 'Detall d'assistència > Justificar en bloc' does in the student file.
+    One student per call; never loops over a class.
+
+    Without confirm=True it lists what is pending in the range (record_id, date,
+    time, subject, absent/late) and which ones would be justified, and changes
+    nothing. Call again with confirm=True only after the teacher approves.
+
+    record_ids picks specific items from that list; omit it to justify every
+    pending item in the range. note is the optional annotation text saved with the
+    justification (e.g. "Visita mèdica"). The 'email me a copy' box is never ticked.
+    Dates are YYYY-MM-DD; date_to defaults to date_from (one day). After saving it
+    re-reads the range and checks that the chosen items are no longer pending."""
+    from .session import _to_latin9
+
+    alu = str(alu_id).strip()
+    if not alu.isdigit():
+        return _err("alu_id must be numeric.")
+    d_to = date_to or date_from
+    for d in (date_from, d_to):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d or ""):
+            return _err("date_from and date_to must be YYYY-MM-DD.")
+    if d_to < date_from:
+        return _err("date_to is before date_from.")
+    s = _s()
+    url = _justify_url(alu, date_from, d_to)
+    try:
+        html = s.get(url)
+    except LoginError as e:
+        return _err(str(e))
+    err = parse.page_error(html)
+    if err:
+        return _err(f"Clickedu said: {err}")
+    page = parse.parse_justify_bloc(html)
+    if not page.get("found"):
+        return _err("The 'Justificar en bloc' page was not found for this student "
+                    "(only the class tutor can justify in bulk).")
+    items = page["items"]
+    if record_ids:
+        wanted = {str(r).strip() for r in record_ids}
+        chosen = [i for i in items if i["record_id"] in wanted]
+        unknown = sorted(wanted - {i["record_id"] for i in items})
+        if unknown:
+            return _err(f"record_ids not pending in this range: {unknown}. "
+                        f"Pending: {[i['record_id'] for i in items]}")
+    else:
+        chosen = list(items)
+    note = _to_latin9(parse.markdown_to_plain(note or ""))
+    preview = {
+        "action": "justify_absences",
+        "student": {"alu_id": alu, "name": page.get("student")},
+        "range": {"from": date_from, "to": d_to},
+        "pending": items,
+        "to_justify": [f'{i["date"]} {i["start"] or ""} {i["subject"]} ({i["type"]})'.replace("  ", " ")
+                       for i in chosen],
+        "to_justify_ids": [i["record_id"] for i in chosen],
+        "left_pending": [i["record_id"] for i in items if i not in chosen],
+        "note": note or None,
+        "email_copy": False,
+    }
+    if not items:
+        preview["status"] = "empty"
+        preview["message"] = "Nothing unjustified in this range; nothing to do."
+        return _ok(preview)
+    if not confirm:
+        preview["status"] = "preview"
+        preview["message"] = "PREVIEW only. Nothing justified. Call again with confirm=true to apply."
+        return _ok(preview)
+    save = page["save"]
+    if not (save.get("action") and save["hidden"].get("p") == "justificar_bloc_bd"
+            and save["hidden"].get("alum") == alu):
+        return _err("The save form does not look as expected; nothing was changed.")
+    form = []
+    for i in items:  # every row's hidden fields, as the browser sends them
+        n = i["index"]
+        form += [(f"id_{n}", i["record_id"]), (f"id_sessio_{n}", i["session_id"] or ""),
+                 (f"abs_ret_id_{n}", {"absent": "1", "late": "2"}.get(i["type"], ""))]
+    form += [(i["checkbox"], "1") for i in chosen]
+    form += list(save["hidden"].items())
+    if save.get("note_field"):
+        form.append((save["note_field"], note))
+    if save.get("submit"):
+        form.append(save["submit"])
+    try:
+        s.post(save["action"].lstrip("/"), data=form)
+        after = parse.parse_justify_bloc(s.get(url))
+    except LoginError as e:
+        return _err(str(e))
+    still = {i["record_id"] for i in after.get("items", [])}
+    done = [r for r in preview["to_justify_ids"] if r not in still]
+    untouched = [r for r in preview["left_pending"] if r in still]
+    verified = len(done) == len(chosen) and len(untouched) == len(preview["left_pending"])
+    preview.update({
+        "status": "applied",
+        "applied": True,
+        "verified": verified,
+        "justified_ids": done,
+        "still_pending": sorted(still),
+        "message": None if verified else "Sent, but the re-read does not match. Check it in Clickedu.",
+    })
+    return _ok(preview)
+
+
 @mcp.tool()
 def send_message(
     recipient_id: str,
