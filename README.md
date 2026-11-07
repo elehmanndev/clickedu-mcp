@@ -83,7 +83,7 @@ Write (gated — preview first, then `confirm=true`):
 | `add_observation(cgap, sessio, alu_id, text, notify_family, confirm)` | write one student's observation for one session; optionally tick "Enviar correu electrònic" (emails the family) |
 | `mark_homework(cgap, sessio, alu_id, status, note, notify_family, confirm)` | set one student's homework `fets` / `no fets` / `no demanats` for one session |
 | `add_tutor_conversation(alu_id, title, text, participants, confirm)` | record one interview summary in a tutored student's file (Converses del tutor); participants ticked, never notified |
-| `justify_absences(alu_id, date_from, date_to, record_ids, note, confirm)` | justify one tutored student's unjustified absences/lates in a date range (Justificar en bloc) |
+| `justify_absences(alu_id, date_from, date_to, keys, include_not_taken, note, confirm)` | justify one tutored student's absences/lates in a date range (Justificar en bloc); optionally also sessions where the register was not taken |
 | `send_message(recipient_id, subject, body, confirm)` | send one message to one recipient |
 
 `mark_attendance` re-reads the whole session form and flips only the one student, so
