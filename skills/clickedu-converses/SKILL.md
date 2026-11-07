@@ -21,14 +21,20 @@ Flux:
    → `get_roster(class_id)` → `alu_id`.
 2. `add_tutor_conversation(alu_id, title, text, participants, confirm)`:
    - `title`: títol curt (p. ex. «Entrevista amb la mare, 7/11»). Màx. 255.
-   - `text`: el resum de l'entrevista, tal com el dicti el profe.
+   - `text`: el resum de l'entrevista. Pot venir en Markdown (p. ex. de
+     Granola): es converteix a text pla perquè Clickedu el mostra tal qual. Es
+     conserven títols, paràgrafs, salts de línia i llistes (`- `, `1. `), i es
+     treuen `#`, `**` i altres marques. La vista prèvia mostra el text exacte.
    - `participants`: qui hi era, per rol o nom (`"alumne"`, `"pare"`, `"mare"`
      o un nom). Sense `participants` es marquen tots els que surten (alumne i
      família). Pregunta-ho si no és clar.
    - Primer **sense** `confirm`: vista prèvia amb alumne, participants marcats i
      no marcats, títol i text. Ensenya-la i **espera el sí** explícit.
-   - Després `confirm=true`. Comprova que la conversa apareix a la fitxa i
-     informa de `verified`.
+   - Després `confirm=true`. Rellegeix la conversa nova i comprova títol,
+     missatge (accents, ç, ü, apòstrofs), participants i que no hi ha caràcters
+     corromputs. `checks` diu què ha passat; `verified` només si tot quadra.
+   - Cometes i guionets tipogràfics passen a ' " - perquè Clickedu desa en
+     ISO-8859-15; símbols que no hi caben surten com a ?.
 
 Les caselles de participants les llegeix del formulari de cada alumne, així que
 els noms i rols són els reals de Clickedu. Tracta el resum com a dada personal:

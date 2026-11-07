@@ -33,8 +33,10 @@ read and has no rows) or `"error"` (login failed, Clickedu showed its own alert
 such as "Dades incorrectes" / "No disposeu de permisos", or the parser broke).
 Never let an unreadable page look like an empty one. Pages are decoded with the
 charset each response declares (most are ISO-8859-15, some AJAX answers are
-UTF-8). A read may POST a search/filter form (`_read(..., post=...)`), never a
-save action. Writes validate inputs, reject non-numeric IDs, replay the
+UTF-8). Every POST encodes form data as ISO-8859-15 (`session.encode_form`), the
+way a browser submits an ISO-8859-15 page; posting UTF-8 makes Clickedu store
+"reunió" as "reuniÃ³". A read may POST a search/filter form
+(`_read(..., post=...)`), never a save action. Writes validate inputs, reject non-numeric IDs, replay the
 full form so only the target row changes, and verify the result by re-reading.
 Keep that pattern for new writes, and keep the preview/`confirm` gate.
 
@@ -44,7 +46,10 @@ through `_apply_session_change()`: it replays the whole form with
 `collect_form_state(form_name="frm_assistencia")` (which mirrors what a browser
 submits: no disabled fields, first option of an unselected select), adds
 `boto_guardar=guardar` like the page's Guardar button, edits only the target
-student's fields, and verifies by re-reading. Find forms by name, not by action:
+student's fields, and verifies by re-reading. Before replaying it checks the
+form's structure with `check_session_form` (form present, every student row in the
+replay, right hidden action), never its state: a session where every student is
+present has no checked attendance radio and is valid. Find forms by name, not by action:
 this form's action is empty. View ids (Observacions is 8 in one school) are read
 from the page menu, never hardcoded. Ticking `cbtn_mail_*` makes Clickedu email
 the family on save, so any write that offers it must say so in its preview.
