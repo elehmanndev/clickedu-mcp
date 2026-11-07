@@ -91,7 +91,12 @@ def parse_subjects(html: str) -> dict:
             for a in p.select("a[href]")
             if _clean(a.get_text())
         ]
-        entry = {"name": name, "class_id": rid, "links": links[:6]}
+        subj = None
+        ev = p.select_one('a[href*="EvaluateTermly&id="], a[href*="Subject&do=Index&id="]')
+        if ev:
+            m = re.search(r"[?&]id=(\d+)", ev.get("href", ""))
+            subj = m.group(1) if m else None
+        entry = {"name": name, "class_id": rid, "subject_id": subj, "links": links[:6]}
         # Subject cards name a course + group (e.g. "... Primer d'ESO-A"); tool
         # cards are single words like "avaluacions". Heuristic: a subject card
         # has a group token (A-D suffix) or a roster link.
@@ -230,14 +235,276 @@ def collect_form_state(html: str, form_action_contains: str) -> dict:
 
 
 # --- generic list pages (calendar, inbox, chat, documents, files) ----------
+def page_error(html: str) -> str | None:
+    """Return Clickedu's own error message if the page is an error screen rather
+    than real content (e.g. 'Dades incorrectes' shown in a bootbox alert)."""
+    m = re.search(r"bootbox\.alert\(\{[^}]*?message\s*:\s*'([^']*)'", html, re.S)
+    if m:
+        msg = _clean(re.sub(r"<[^>]+>", " ", m.group(1)))
+        return msg or "Clickedu returned an alert with no message"
+    low = html[:5000].lower()
+    for marker in ("no teniu permís", "no tiene permiso", "acceso denegado", "accés denegat"):
+        if marker in low:
+            return marker
+    return None
+
+
+_ACC_COLS = ("A", "AJ", "R", "RJ")
+
+
+def _count(cell: str) -> int:
+    cell = cell.strip()
+    return int(cell) if cell.isdigit() else 0  # Clickedu prints "-" for zero
+
+
+def parse_monthly_accumulated(html: str) -> dict:
+    """'Resum mensual acumulat' for a class: per student, per month A / AJ / R / RJ
+    and number of sessions, plus totals. R (unjustified late) and RJ (justified
+    late) are kept separate on purpose. Every student on the class list is
+    included, also those with no incidents."""
+    soup = _soup(html)
+    months_avail, months_sel = [], []
+    sel = soup.find("select", attrs={"name": "mesos[]"})
+    if sel:
+        for o in sel.find_all("option"):
+            item = {"value": o.get("value"), "label": _clean(o.get_text())}
+            months_avail.append(item)
+            if o.has_attr("selected"):
+                months_sel.append(item)
+    table = None
+    for t in soup.find_all("table"):
+        if "Alumne" in t.get_text()[:200]:
+            table = t
+            break
+    if table is None:
+        return {"months": months_sel, "available_months": months_avail, "students": []}
+    rows = table.find_all("tr")
+    # Header row 0: Alumne/a | <month> ... | Totals per alumne | Percentatges
+    head = [_clean(c.get_text(" ")) for c in rows[0].find_all(["th", "td"])]
+    month_labels = [h for h in head[1:] if not h.lower().startswith(("totals", "percent"))]
+    students = []
+    class_total = None
+    for r in rows[2:]:
+        cells = [_clean(c.get_text(" ")) for c in r.find_all(["th", "td"])]
+        if len(cells) < 2 or not cells[0]:
+            continue
+        name, vals = cells[0], cells[1:]
+        per_month, i = {}, 0
+        for label in month_labels:
+            chunk = vals[i:i + 5]
+            i += 5
+            if len(chunk) < 5:
+                break
+            per_month[label] = {**{k: _count(v) for k, v in zip(_ACC_COLS, chunk[:4])},
+                                "sessions": _count(chunk[4])}
+        tot = vals[i:i + 5]
+        pct = vals[i + 5:i + 9]
+        totals = ({**{k: _count(v) for k, v in zip(_ACC_COLS, tot[:4])},
+                   "sessions": _count(tot[4]) if len(tot) > 4 else 0} if tot else {})
+        row = {
+            "name": name,
+            "months": per_month,
+            "totals": totals,
+            "percentages": dict(zip(_ACC_COLS, pct)),
+        }
+        if name.lower() in ("total", "totals"):
+            class_total = row
+            continue
+        students.append(row)
+    return {
+        "months": months_sel,
+        "available_months": months_avail,
+        "legend": {"A": "unjustified absences", "AJ": "justified absences",
+                   "R": "unjustified lates", "RJ": "justified lates"},
+        "students": students,
+        "count": len(students),
+        "class_total": class_total,
+    }
+
+
+_DAILY_KIND = {
+    "assistència": "attendance",
+    "deures": "homework",
+    "treball": "work",
+    "comportament": "behaviour",
+    "comportament a lectura": "reading_behaviour",
+    "llegeix?": "reading",
+    "observacions": "observation",
+}
+
+
+def parse_student_daily(html: str) -> dict:
+    """Day-by-day log of one student (the 'Dia a dia' details of the student
+    file): one entry per recorded item with date, time, subject, kind
+    (attendance / homework / work / behaviour / observation ...) and result.
+    Attendance results distinguish 'absència', 'absència justificada', 'retard'
+    and 'retard justificat'."""
+    soup = _soup(html)
+    period = None
+    for el in soup.find_all(["h3", "h4", "strong", "b"]):
+        t = _clean(el.get_text(" "))
+        if t.lower().startswith("detalls"):
+            period = t
+            break
+    table = soup.find("table")
+    entries = []
+    if table:
+        for r in table.find_all("tr")[1:]:
+            c = [_clean(x.get_text(" ")) for x in r.find_all("td")]
+            if len(c) < 5:
+                continue
+            date, hour, subject, param, result = c[:5]
+            obs = c[5] if len(c) > 5 and c[5] != "-" else None
+            d = re.fullmatch(r"(\d{2})/(\d{2})/(\d{4})", date)
+            hm = re.findall(r"\d{1,2}:\d{2}", hour)
+            entries.append({
+                "date": f"{d.group(3)}-{d.group(2)}-{d.group(1)}" if d else date,
+                "start": hm[0] if hm else None,
+                "end": hm[1] if len(hm) > 1 else None,
+                "subject": subject,
+                "kind": _DAILY_KIND.get(param.lower(), param),
+                "item": param,
+                "result": result,
+                "note": obs,
+            })
+    entries.sort(key=lambda e: (e["date"], e["start"] or ""))
+    summary: dict[str, int] = {}
+    for e in entries:
+        if e["kind"] in ("attendance", "homework"):
+            key = f'{e["kind"]}: {e["result"]}'
+            summary[key] = summary.get(key, 0) + 1
+    return {"period": period, "entries": entries, "count": len(entries), "summary": summary}
+
+
+def parse_evaluation_structure(html: str) -> dict:
+    """Structure of the 'Avaluar' page of one subject and term: the sections
+    (level 0, with their weight in the final grade) and the activities inside
+    them (level 1, with their weight inside the section), the students, and the
+    available terms. Grades come separately as JSON (see parse_evaluation_grades)."""
+    import html as _html
+
+    soup = _soup(html)
+    heads = [_clean(x.get_text(" ")) for x in soup.find_all(["h1", "h2", "h3", "h4"])]
+    heads = [h for h in heads if h]
+    # weights: input name percent_<parent>_<item>_<n>
+    weights: dict[str, tuple[str, str]] = {}
+    for inp in soup.select("input.InputPercent"):
+        m = re.match(r"percent_(\d+)_(\d+)_\d+", inp.get("name", ""))
+        if m:
+            weights[m.group(2)] = (m.group(1), inp.get("value") or "")
+    items = []
+    for th in soup.select("th[attr-item]"):
+        iid = th.get("attr-item")
+        cls = " ".join(th.get("class") or [])
+        level = 1 if "nivell-1" in cls else 0
+        pop = BeautifulSoup(_html.unescape(th.get("data-content", "")), "lxml").get_text(" ", strip=True)
+        a = th.find("a", class_="header-name")
+        parent, w = weights.get(iid, (None, ""))
+        items.append({
+            "item_id": iid,
+            "code": _clean(a.get_text()) if a else None,
+            "name": _clean(pop) or None,
+            "level": "section" if level == 0 else "activity",
+            "parent_id": parent if level == 1 else None,
+            "weight_percent": float(w) if re.fullmatch(r"\d+(\.\d+)?", w or "") else None,
+            "has_children": th.get("attr-children") == "1",
+        })
+    students = {}
+    for inp in soup.select("input[attr-student]"):
+        sid = inp.get("attr-student")
+        if sid and sid not in students:
+            row = inp.find_parent("tr")
+            name = ""
+            if row:
+                first = row.find(["th", "td"])
+                name = re.sub(r"^\d+\s*\.\s*", "", _clean(first.get_text(" "))) if first else ""
+            students[sid] = name
+    terms = sorted(set(re.findall(r"trm=(\d+)(?![\dp])", html)))
+    return {
+        "subject": heads[0] if heads else None,
+        "course": heads[1] if len(heads) > 1 else None,
+        "term": heads[2] if len(heads) > 2 else None,
+        "term_ids": terms,
+        "items": items,
+        "students": [{"alu_id": k, "name": v} for k, v in students.items()],
+    }
+
+
+def parse_class_behaviour(html: str) -> dict:
+    """'Comportament' reports of a class group (incidències and mèrits). Each
+    report panel is returned with its title and, when Clickedu shows a table,
+    its rows as header->value dicts. Panels with no data are listed as empty.
+
+    Note: only validated on a class with no incidents recorded; the row layout of
+    a filled report is read generically from its table headers."""
+    soup = _soup(html)
+    dfrom = soup.find("input", attrs={"name": "dataIni"})
+    dto = soup.find("input", attrs={"name": "dataFi"})
+    reports = []
+    for p in soup.select(".panel"):
+        head = p.select_one(".panel-heading")
+        body = p.select_one(".panel-body")
+        if not head or not body:
+            continue
+        title = _clean(head.get_text(" "))
+        if title.startswith("Paràmetres"):
+            continue
+        rows = []
+        table = body.find("table")
+        if table:
+            trs = table.find_all("tr")
+            headers = [_clean(c.get_text(" ")) for c in trs[0].find_all(["th", "td"])] if trs else []
+            for tr in trs[1:]:
+                cells = [_clean(c.get_text(" ")) for c in tr.find_all(["th", "td"])]
+                if any(cells):
+                    rows.append(dict(zip(headers, cells)) if headers else {"cells": cells})
+        reports.append({"report": title, "rows": rows,
+                        "has_data": bool(rows) or "No hi ha dades" not in body.get_text()})
+    return {
+        "date_from": dfrom.get("value") if dfrom else None,
+        "date_to": dto.get("value") if dto else None,
+        "reports": reports,
+        "incidents": [r for r in reports if r["has_data"]],
+    }
+
+
+def _ymd(raw: str | None) -> str | None:
+    if raw and re.fullmatch(r"\d{8}", raw):
+        return f"{raw[:4]}-{raw[4:6]}-{raw[6:]}"
+    return None
+
+
 def parse_calendar(html: str) -> dict:
+    """Events of the calendar view. Each event link carries its date in the href
+    (date=YYYYMMDD); the time sits in the <i> just before it and the full title,
+    place and owner are in the overlib tooltip."""
     soup = _soup(html)
     events = []
-    for ev in soup.select('[class*="event"], .fc-event, li[class*="esdeveniment"]'):
-        t = _clean(ev.get_text(" "))
-        if t:
-            events.append({"text": t[:200]})
-    return {"events": events[:100], "count": len(events)}
+    for a in soup.select("a.event"):
+        if "dayModLink" in (a.get("class") or []):
+            continue  # "Nou esdeveniment" button, not an event
+        href = a.get("href", "")
+        m_date = re.search(r"[?&]date=(\d{8})", href)
+        m_id = re.search(r"[?&]id=(\d+)", href)
+        time = None
+        prev = a.find_previous_sibling("i")
+        if prev:
+            time = _clean(prev.get_text())
+        tip = a.get("onmouseover", "")
+        m_cap = re.search(r"CAPTION,\s*'([^']*)'", tip)
+        m_owner = re.search(r"Propietari:\s*([^&<]+)", tip)
+        events.append(
+            {
+                "date": _ymd(m_date.group(1) if m_date else None),
+                "time": time,
+                "title": _clean(a.get_text()),
+                "full_title": _clean(m_cap.group(1)) if m_cap else None,
+                "owner": _clean(m_owner.group(1)) if m_owner else None,
+                "event_id": m_id.group(1) if m_id else None,
+            }
+        )
+    events.sort(key=lambda e: (e["date"] or "", e["time"] or ""))
+    return {"events": events, "count": len(events)}
 
 
 def parse_messages(html: str) -> dict:

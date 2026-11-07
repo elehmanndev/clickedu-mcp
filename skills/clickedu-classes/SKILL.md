@@ -9,11 +9,12 @@ description: >-
 
 # Classes i alumnes
 
-1. `get_subjects_and_rosters` → les assignatures i grups del profe, cadascun amb
-   el seu `class_id`, més els enllaços d'eines de tutoria/curs.
-2. `get_roster(class_id)` → la llista d'alumnes d'aquell grup (`alu_id`, `name`).
+1. `get_subjects_and_rosters` → les assignatures i grups del profe. Cada entrada
+   porta `class_id` (grup, per llistes, assistència i comportament) i/o
+   `subject_id` (assignatura, per l'avaluació), més enllaços de tutoria i curs.
+2. `get_roster(class_id)` → la llista d'alumnes del grup (`alu_id`, `name`).
 
-Per veure el contingut d'una sessió concreta, usa `clickedu-sessio`. L'entrada de
-notes/qualificacions viu a les pàgines d'avaluació de Clickedu (enllaços
-`avaluacions` / `avaluar per alumne` que surten a `get_subjects_and_rosters`); no
-hi ha eina d'escriptura de notes aquí, així que remet a aquests enllaços.
+Aquests ids alimenten les altres skills: `clickedu-tutoria` (resum d'assistència
+i comportament del grup), `clickedu-alumne` (seguiment d'un alumne) i
+`clickedu-avaluacio` (notes d'una assignatura). Per una sessió concreta, usa
+`clickedu-sessio`.

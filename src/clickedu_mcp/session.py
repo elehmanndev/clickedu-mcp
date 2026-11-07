@@ -72,7 +72,24 @@ class ClickeduSession:
 
     @staticmethod
     def _text(resp) -> str:
-        return resp.content.decode(ENCODING, errors="replace")
+        """Decode with the charset the response declares. Most Clickedu pages are
+        ISO-8859-15, but some AJAX endpoints answer in UTF-8."""
+        raw = resp.content
+        ctype = (resp.headers.get("content-type") or "").lower()
+        m = re.search(r"charset=([\w-]+)", ctype)
+        if not m:
+            m = re.search(rb'charset=["\']?([\w-]+)', raw[:2048])
+            charset = m.group(1).decode("ascii", "ignore").lower() if m else ""
+        else:
+            charset = m.group(1)
+        if charset.replace("-", "") == "utf8":
+            return raw.decode("utf-8", errors="replace")
+        if not charset:
+            try:
+                return raw.decode("utf-8")
+            except UnicodeDecodeError:
+                pass
+        return raw.decode(ENCODING, errors="replace")
 
     def _looks_logged_out(self, html: str) -> bool:
         head = html[:4000]

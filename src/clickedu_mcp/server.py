@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
@@ -30,6 +31,33 @@ def _s() -> ClickeduSession:
     return get_session()
 
 
+_LIST_KEYS = ("events", "sessions", "students", "subjects", "messages", "entries",
+              "contacts", "documents", "items", "recipients", "incidents",
+              "evaluations")
+
+
+def _read(path: str, parser, post: list | None = None) -> str:
+    """Fetch a page and parse it, tagging the result with a status so the agent
+    can tell 'nothing there' from 'could not read the page':
+    status = "ok" (has data), "empty" (page read fine, no rows) or "error".
+    If post is given, the page is requested with that form data (read-only
+    search/filter forms only, never a save action)."""
+    try:
+        html = _s().post(path, data=post) if post is not None else _s().get(path)
+    except LoginError as e:
+        return _ok({"status": "error", "error": f"login: {e}"})
+    err = parse.page_error(html)
+    if err:
+        return _ok({"status": "error", "error": f"Clickedu said: {err}", "page": path})
+    try:
+        data = parser(html)
+    except Exception as e:  # noqa: BLE001 - surface parser breakage, don't hide it
+        return _ok({"status": "error", "error": f"could not parse the page: {e}", "page": path})
+    lists = [data[k] for k in _LIST_KEYS if isinstance(data.get(k), list)]
+    data["status"] = "empty" if lists and not any(lists) else "ok"
+    return _ok(data)
+
+
 # =====================================================================
 # READ TOOLS
 # =====================================================================
@@ -37,29 +65,30 @@ def _s() -> ClickeduSession:
 def get_schedule() -> str:
     """Your weekly teaching timetable: each class session with day, time, subject,
     group, room, co-teachers, and a link to the session detail."""
-    try:
-        return _ok(parse.parse_schedule(_s().get("assignatures/el_meu_horari.php")))
-    except LoginError as e:
-        return _err(str(e))
+    return _read("assignatures/el_meu_horari.php", parse.parse_schedule)
 
 
 @mcp.tool()
-def get_calendar() -> str:
-    """Your Clickedu calendar: upcoming events and entries."""
-    try:
-        return _ok(parse.parse_calendar(_s().get("calendari/index.php")))
-    except LoginError as e:
-        return _err(str(e))
+def get_calendar(view: str = "week", date: str = "") -> str:
+    """Your Clickedu calendar events, each with date (YYYY-MM-DD), time, title,
+    owner and event_id. view is "week" (default) or "month"; date (YYYY-MM-DD)
+    picks the week/month to show, default today."""
+    if view not in ("week", "month"):
+        return _err('view must be "week" or "month".')
+    q = f"calendari/index.php?view={view}"
+    if date:
+        d = date.replace("-", "")
+        if not re.fullmatch(r"\d{8}", d):
+            return _err("date must be YYYY-MM-DD.")
+        q += f"&date={d}"
+    return _read(q, parse.parse_calendar)
 
 
 @mcp.tool()
 def get_subjects_and_rosters() -> str:
     """Your subjects and class groups, with the class_id for each so you can pull a
     roster with get_roster, plus your tutor/course tool links."""
-    try:
-        return _ok(parse.parse_subjects(_s().get("go/Index.php?ctr=Subjects/Subjects")))
-    except LoginError as e:
-        return _err(str(e))
+    return _read("go/Index.php?ctr=Subjects/Subjects", parse.parse_subjects)
 
 
 @mcp.tool()
@@ -69,11 +98,7 @@ def get_roster(class_id: str) -> str:
     cid = str(class_id).strip()
     if not cid.isdigit():
         return _err("class_id must be numeric.")
-    try:
-        html = _s().get(f"go/Index.php?ctr=Classes/Students&id={cid}")
-        return _ok(parse.parse_roster(html))
-    except LoginError as e:
-        return _err(str(e))
+    return _read(f"go/Index.php?ctr=Classes/Students&id={cid}", parse.parse_roster)
 
 
 @mcp.tool()
@@ -83,11 +108,7 @@ def get_session_detail(assig: str, sessio: str) -> str:
     a, se = str(assig).strip(), str(sessio).strip()
     if not (a.isdigit() and se.isdigit()):
         return _err("assig and sessio must be numeric.")
-    try:
-        html = _s().get(f"assignatures/sessio.php?assig={a}&sessio={se}")
-        return _ok(parse.parse_session(html))
-    except LoginError as e:
-        return _err(str(e))
+    return _read(f"assignatures/sessio.php?assig={a}&sessio={se}", parse.parse_session)
 
 
 @mcp.tool()
@@ -99,52 +120,177 @@ def get_attendance(cgap: str, sessio: str, n: int = 0) -> str:
     c, se = str(cgap).strip(), str(sessio).strip()
     if not (c.isdigit() and se.isdigit()):
         return _err("cgap and sessio must be numeric.")
-    try:
-        q = f"assistencia/index.php?cgap={c}&sessio={se}"
-        if n:
-            q += f"&n={int(n)}"
-        return _ok(parse.parse_attendance_state(_s().get(q)))
-    except LoginError as e:
-        return _err(str(e))
+    q = f"assistencia/index.php?cgap={c}&sessio={se}"
+    if n:
+        q += f"&n={int(n)}"
+    return _read(q, parse.parse_attendance_state)
 
 
 @mcp.tool()
 def get_inbox() -> str:
     """Your communications inbox (Communication module)."""
-    try:
-        html = _s().get("go/Index.php?ctr=Communication/Communication")
-        return _ok(parse.parse_messages(html))
-    except LoginError as e:
-        return _err(str(e))
+    return _read("go/Index.php?ctr=Communication/Communication", parse.parse_messages)
 
 
 @mcp.tool()
 def get_chat_contacts() -> str:
     """Your chat contacts (Messaging/Chat)."""
-    try:
-        html = _s().get("go/Index.php?ctr=Messaging/Chat")
-        return _ok(parse.parse_chat_contacts(html))
-    except LoginError as e:
-        return _err(str(e))
+    return _read("go/Index.php?ctr=Messaging/Chat", parse.parse_chat_contacts)
 
 
 @mcp.tool()
 def get_documents() -> str:
     """Your most recent documents (Documents registry)."""
-    try:
-        html = _s().get("go/Index.php?ctr=Documents/DocumentsRegistry&do=Last")
-        return _ok(parse.parse_documents(html))
-    except LoginError as e:
-        return _err(str(e))
+    return _read("go/Index.php?ctr=Documents/DocumentsRegistry&do=Last", parse.parse_documents)
 
 
 @mcp.tool()
 def get_files() -> str:
     """Your files area (files/index.php)."""
+    return _read("files/index.php", parse.parse_files)
+
+
+@mcp.tool()
+def get_student_daily(
+    alu_id: str, class_id: str, date_from: str = "", date_to: str = ""
+) -> str:
+    """Day-by-day log of ONE student ('Dia a dia' in the student file): every
+    recorded absence, justified absence, late, justified late, homework done/not
+    done, work and behaviour item and teacher observation, each with date, time,
+    subject and result, plus a count summary.
+
+    alu_id comes from get_roster, class_id from get_subjects_and_rosters.
+    date_from / date_to are YYYY-MM-DD; default is the whole current school year.
+    Read-only."""
+    alu, cid = str(alu_id).strip(), str(class_id).strip()
+    if not (alu.isdigit() and cid.isdigit()):
+        return _err("alu_id and class_id must be numeric.")
+    dates = []
+    for d in (date_from, date_to):
+        if d and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d):
+            return _err("dates must be YYYY-MM-DD.")
+        dates.append(d.replace("-", "/") if d else "")
+    # The school-year id (ce) is the selected option of the student file.
     try:
-        return _ok(parse.parse_files(_s().get("files/index.php")))
+        fitxa = _s().get(f"assignatures/fitxa_alumne.php?alum={alu}&p=diaadia")
     except LoginError as e:
-        return _err(str(e))
+        return _ok({"status": "error", "error": f"login: {e}"})
+    err = parse.page_error(fitxa)
+    if err:
+        return _ok({"status": "error", "error": f"Clickedu said: {err}"})
+    m = re.search(rf'value="(\d+)_{cid}"', fitxa)
+    if not m:
+        return _ok({"status": "error",
+                    "error": f"student {alu} has no school year in class {cid}"})
+    ce = m.group(1)
+    start = dates[0] or ""
+    end = dates[1] or ""
+    form = [
+        ("ajax", "continc_detalls"), ("id_usuari", alu),
+        ("data_inicial", start), ("data_final", end),
+        ("tipus_assistencia", "sessio"), ("materia_actual", ""),
+        ("numero_avaluacio", ""), ("total_avaluacions_alumne", "3"),
+        ("id_classe", cid), ("ce", ce), ("mostrartot", "true"),
+        ("datainitriada", start), ("datafitriada", end),
+    ] + [("array_tipus_parametres_mostrar[]", x) for x in ("4", "4", "1", "2", "4", "3")]
+    return _read("includes/include_fitxa_alumne/diaadia_ajax.php",
+                 parse.parse_student_daily, post=form)
+
+
+@mcp.tool()
+def get_class_behaviour(class_id: str, date_from: str = "", date_to: str = "") -> str:
+    """Behaviour record ('Comportament': incidències and mèrits) of one class
+    group for a date range, as Clickedu's reports. status "empty" means the page
+    was read and there is nothing recorded in that range. Read-only: it never
+    creates or changes an incident or sanction.
+
+    class_id from get_subjects_and_rosters; dates YYYY-MM-DD, default the current
+    school year. For one student's day-by-day items (behaviour notes included)
+    use get_student_daily."""
+    cid = str(class_id).strip()
+    if not cid.isdigit():
+        return _err("class_id must be numeric.")
+    form = []
+    for name, d in (("dataIni", date_from), ("dataFi", date_to)):
+        if d:
+            m = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})", d)
+            if not m:
+                return _err("dates must be YYYY-MM-DD.")
+            form.append((name, f"{m.group(3)}/{m.group(2)}/{m.group(1)}"))
+    path = f"go/Index.php?ctr=Classes/Behaviour&do=Index&id={cid}"
+    return _read(path, parse.parse_class_behaviour, post=form or None)
+
+
+@mcp.tool()
+def get_evaluation(subject_id: str, term_id: str = "") -> str:
+    """Read the 'Avaluar' page of one subject for one term: its sections and
+    activities with their weights (%), and every grade already entered, per
+    student and activity. Read-only; it never saves anything.
+
+    subject_id is the assignatura id (the number in the 'EvaluateTermly&id='
+    link that get_subjects_and_rosters returns, e.g. 3376). term_id picks the
+    term (ids are listed in the answer as term_ids); omit it for the current one.
+    Grades come from Clickedu as entered; a final grade that Clickedu computes in
+    the page is not stored until the teacher saves, so it may be missing here."""
+    sid, trm = str(subject_id).strip(), str(term_id).strip()
+    if not sid.isdigit() or (trm and not trm.isdigit()):
+        return _err("subject_id and term_id must be numeric.")
+    q = f"go/Index.php?ctr=Evaluate/EvaluateTermly&id={sid}" + (f"&trm={trm}" if trm else "")
+    try:
+        page = _s().get(q)
+        grades_raw = _s().get(f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GetGrades&id={sid}&&trm={trm}")
+    except LoginError as e:
+        return _ok({"status": "error", "error": f"login: {e}"})
+    err = parse.page_error(page)
+    if err:
+        return _ok({"status": "error", "error": f"Clickedu said: {err}", "page": q})
+    try:
+        data = parse.parse_evaluation_structure(page)
+        grades = json.loads(grades_raw or "[]")
+    except Exception as e:  # noqa: BLE001
+        return _ok({"status": "error", "error": f"could not parse the evaluation: {e}"})
+    names = {i["item_id"]: (i["code"] or i["name"]) for i in data["items"]}
+    names[sid] = "final"  # the subject-level grade is keyed by the subject id
+    by_student: dict[str, dict] = {s["alu_id"]: {"name": s["name"], "grades": {}}
+                                   for s in data["students"]}
+    for g in grades if isinstance(grades, list) else []:
+        alu = str(g.get("id_alumne"))
+        item = str(g.get("id_criteri"))
+        val = g.get("nota_mod") if g.get("nota_mod") is not None else g.get("nota")
+        if val is None and g.get("text"):
+            val = g.get("text")
+        rec = by_student.setdefault(alu, {"name": "", "grades": {}})
+        rec["grades"][names.get(item, item)] = val
+    data["grades"] = [{"alu_id": k, **v} for k, v in by_student.items()]
+    data["grades_entered"] = sum(
+        1 for v in by_student.values() for g in v["grades"].values() if g is not None
+    )
+    data["status"] = "ok" if data["items"] else "empty"
+    return _ok(data)
+
+
+@mcp.tool()
+def get_monthly_attendance(class_id: str, months: list[str] | None = None) -> str:
+    """'Resum mensual acumulat' for one class group: every student on the list
+    (also those with no incidents), per month and in total, with A (unjustified
+    absences), AJ (justified absences), R (unjustified lates), RJ (justified
+    lates) and number of sessions, plus percentages. R and RJ are separate.
+
+    class_id comes from get_subjects_and_rosters. months is a list of two-digit
+    month numbers ("09", "10", ...); omit it to get Clickedu's default selection.
+    To get the whole school year so far, pass every month from "09" to the current
+    one. Read-only."""
+    cid = str(class_id).strip()
+    if not cid.isdigit():
+        return _err("class_id must be numeric.")
+    path = f"go/Index.php?ctr=Classes/Attendance&do=MonthlyAccumulated&id={cid}"
+    if not months:
+        return _read(path, parse.parse_monthly_accumulated)
+    ms = [str(m).strip().zfill(2) for m in months]
+    if not all(re.fullmatch(r"(0[1-9]|1[0-2])", m) for m in ms):
+        return _err('months must be two-digit month numbers, e.g. ["09","10","11"].')
+    form = [("mesos[]", m) for m in ms] + [("export", "0")]
+    return _read(path, parse.parse_monthly_accumulated, post=form)
 
 
 # =====================================================================
