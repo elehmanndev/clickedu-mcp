@@ -12,5 +12,6 @@ description: >-
 - `get_documents` → els documents recents (registre de documents).
 - `get_files` → l'àrea d'arxius (`files/index.php`).
 
-Qualsevol dels dos pot tornar un `note` quan no hi ha res per aquest compte; si
-surt, digues-ho clarament.
+Mira el `status`: `"ok"` hi ha dades, `"empty"` la pàgina s'ha llegit i no hi ha
+res, `"error"` no s'ha pogut llegir (p. ex. «No disposeu de permisos» si el centre
+no dona accés a aquest mòdul). Digues-ho tal qual; un error no és una llista buida.

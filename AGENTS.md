@@ -27,9 +27,14 @@ handles students' data, so keep that in mind in every change.
 
 ## Tools
 
-Defined in `server.py`, decorated with `@mcp.tool()`. Reads return JSON; a read
-returns `{"error": ...}` on login failure and may return a `note` when a module is
-empty for the account. Writes validate inputs, reject non-numeric IDs, replay the
+Defined in `server.py`, decorated with `@mcp.tool()`. Reads go through `_read()`,
+which tags every answer with `status`: `"ok"` (has data), `"empty"` (the page was
+read and has no rows) or `"error"` (login failed, Clickedu showed its own alert
+such as "Dades incorrectes" / "No disposeu de permisos", or the parser broke).
+Never let an unreadable page look like an empty one. Pages are decoded with the
+charset each response declares (most are ISO-8859-15, some AJAX answers are
+UTF-8). A read may POST a search/filter form (`_read(..., post=...)`), never a
+save action. Writes validate inputs, reject non-numeric IDs, replay the
 full form so only the target row changes, and verify the result by re-reading.
 Keep that pattern for new writes, and keep the preview/`confirm` gate.
 
