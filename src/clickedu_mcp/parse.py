@@ -152,6 +152,96 @@ def parse_session(html: str) -> dict:
 
 
 # --- attendance (read current state from assistencia page) -----------------
+HOMEWORK = {"1": "fets", "2": "no fets", "3": "no demanats"}
+
+
+def parse_session_views(html: str) -> dict:
+    """The per-student views of a session page besides attendance: the menu of
+    views (Deures, Observacions, Treball, Comportament...) with their ids, and
+    for each student the current homework value, homework note, and the value of
+    every param_<view>_<alu> field (free text for Observacions, a select or radio
+    for the others). Also the name and state of each student's email checkbox.
+
+    View ids come from the page menu, never hardcoded: they can differ per school."""
+    soup = _soup(html)
+    views = {}
+    for li in soup.find_all("li", attrs={"name": "vista"}):
+        vid = li.get("id")
+        if vid and vid not in ("0",):
+            views[vid] = _clean(li.get_text(" "))
+    # options for select/radio views, so a teacher's words can map to a value
+    view_options: dict[str, list] = {}
+    students: dict[str, dict] = {}
+
+    def st(alu):
+        return students.setdefault(alu, {"alu_id": alu, "name": "", "views": {}})
+
+    for vid in views:
+        box = soup.find(id=f"vista_param_{vid}")
+        if box is None:
+            continue
+        for el in box.find_all(["input", "select", "textarea"]):
+            name = el.get("name") or ""
+            if vid == "deures":
+                m = re.fullmatch(r"deures_(\d+)(_obs)?", name)
+                if not m:
+                    continue
+                s = st(m.group(1))
+                if m.group(2):
+                    s["homework_note"] = el.get_text()
+                elif el.has_attr("checked"):
+                    s["homework"] = HOMEWORK.get(el.get("value"), el.get("value"))
+                s.setdefault("homework", None)
+                continue
+            m = re.fullmatch(rf"param_{re.escape(vid)}_(\d+)", name)
+            if not m:
+                continue
+            s = st(m.group(1))
+            if el.name == "textarea":
+                s["views"][vid] = el.get_text()
+                view_options.setdefault(vid, "text")
+            elif el.name == "select":
+                opt = el.select_one("option[selected]")
+                s["views"][vid] = _clean(opt.get_text()) if opt and opt.get("value") else None
+                if vid not in view_options:
+                    view_options[vid] = [
+                        {"value": o.get("value"), "label": _clean(o.get_text())}
+                        for o in el.find_all("option") if o.get("value")
+                    ]
+            elif el.get("type") == "radio":
+                if el.has_attr("checked"):
+                    s["views"][vid] = el.get("value")
+                s["views"].setdefault(vid, None)
+                opts = view_options.setdefault(vid, [])
+                if isinstance(opts, list) and not any(o["value"] == el.get("value") for o in opts):
+                    opts.append({"value": el.get("value"), "label": el.get("value")})
+    # names and email checkboxes from the main attendance view
+    main = soup.find(id="vista_param_0")
+    if main:
+        for cb in main.find_all("input", attrs={"name": re.compile(r"^cbtn_mail_")}):
+            alu = cb.get("name").split("_")[-1]
+            s = st(alu)
+            s["email_field"] = cb.get("name")
+            s["email_checked"] = cb.has_attr("checked")
+            row = cb.find_parent("tr")
+            if row and not s["name"]:
+                for td in row.find_all("td"):
+                    t = _clean(td.get_text(" "))
+                    if "," in t and not t[:1].isdigit():
+                        s["name"] = t
+                        break
+    return {
+        "views": [{"id": k, "name": v,
+                   "kind": ("text" if view_options.get(k) == "text"
+                            else "homework" if k == "deures" else "choice"),
+                   "options": (view_options.get(k) if isinstance(view_options.get(k), list)
+                               else [{"value": v2, "label": l} for v2, l in HOMEWORK.items()]
+                               if k == "deures" else None)}
+                  for k, v in views.items()],
+        "students": sorted(students.values(), key=lambda x: x["name"]),
+    }
+
+
 def parse_attendance_state(html: str) -> dict:
     """Parse the per-student attendance controls into a reviewable list.
 
@@ -200,36 +290,49 @@ def parse_attendance_state(html: str) -> dict:
     return {"students": state, "count": len(state)}
 
 
-def collect_form_state(html: str, form_action_contains: str) -> dict:
-    """Collect every current form field value, to replay a form safely."""
+def collect_form_state(html: str, form_action_contains: str = "", form_name: str = "") -> dict:
+    """Collect every current form field value, to replay a form safely.
+
+    Prefer form_name: some Clickedu forms have an empty action (the attendance
+    form posts to its own URL), and matching on action then picks the wrong form,
+    such as the language selector, which would drop every other student's state.
+    Returns {} when the form is not found; callers must treat that as an error."""
     soup = _soup(html)
     form = None
-    for f in soup.find_all("form"):
-        if form_action_contains in (f.get("action") or ""):
-            form = f
-            break
+    if form_name:
+        form = soup.find("form", attrs={"name": form_name})
+    else:
+        for f in soup.find_all("form"):
+            if form_action_contains and form_action_contains in (f.get("action") or ""):
+                form = f
+                break
     if form is None:
         return {}
+    # Reproduce what a browser submits: disabled controls are not sent, and a
+    # select with no option marked selected sends its first option.
     data: dict[str, str] = {}
     for inp in form.find_all("input"):
         nm = inp.get("name")
-        if not nm:
+        if not nm or inp.has_attr("disabled"):
             continue
         typ = (inp.get("type") or "text").lower()
         if typ in ("checkbox", "radio"):
             if inp.has_attr("checked"):
                 data[nm] = inp.get("value", "on")
-        elif typ not in ("submit", "button", "file", "image"):
+        elif typ not in ("submit", "button", "file", "image", "reset"):
             data[nm] = inp.get("value", "")
     for sel in form.find_all("select"):
         nm = sel.get("name")
-        if not nm:
+        if not nm or sel.has_attr("disabled"):
             continue
-        opt = sel.select_one("option[selected]")
-        data[nm] = (opt.get("value") if opt else "") or ""
+        opt = sel.select_one("option[selected]") or sel.find("option")
+        if opt is None:
+            continue
+        val = opt.get("value")
+        data[nm] = val if val is not None else opt.get_text()
     for ta in form.find_all("textarea"):
         nm = ta.get("name")
-        if nm:
+        if nm and not ta.has_attr("disabled"):
             data[nm] = ta.get_text()
     return data
 

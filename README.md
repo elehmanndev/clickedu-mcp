@@ -64,6 +64,7 @@ Read (return clean JSON):
 | `get_chat_contacts` | `go/Index.php?ctr=Messaging/Chat` |
 | `get_documents` | `go/Index.php?ctr=Documents/DocumentsRegistry&do=Last` |
 | `get_files` | `files/index.php` |
+| `get_session_notes(cgap, sessio)` | `assistencia/index.php` (homework, observation and other per-student views of a session) |
 | `get_monthly_attendance(class_id, months)` | `go/Index.php?ctr=Classes/Attendance&do=MonthlyAccumulated` (A / AJ / R / RJ per student and month) |
 | `get_student_daily(alu_id, class_id, date_from, date_to)` | student file "Dia a dia" (each absence, late, homework, observation by date) |
 | `get_class_behaviour(class_id, date_from, date_to)` | `go/Index.php?ctr=Classes/Behaviour` (incidents and merits) |
@@ -79,6 +80,8 @@ Write (gated — preview first, then `confirm=true`):
 | Tool | Action |
 | --- | --- |
 | `mark_attendance(cgap, sessio, alu_id, status, reason_code, justified, confirm)` | set one student `absent`, `late` or `present` for one session |
+| `add_observation(cgap, sessio, alu_id, text, notify_family, confirm)` | write one student's observation for one session; optionally tick "Enviar correu electrònic" (emails the family) |
+| `mark_homework(cgap, sessio, alu_id, status, note, notify_family, confirm)` | set one student's homework `fets` / `no fets` / `no demanats` for one session |
 | `send_message(recipient_id, subject, body, confirm)` | send one message to one recipient |
 
 `mark_attendance` re-reads the whole session form and flips only the one student, so
@@ -142,8 +145,12 @@ declares (most Clickedu pages are ISO-8859-15, some AJAX answers are UTF-8).
   or a JSON SPA with nothing to show for your account.
 - `get_class_behaviour` was only validated on a class with nothing recorded; filled
   reports are read generically from their table headers. Report any odd output.
-- Grades are read-only. Writing grades, creating sections/activities, homework and
-  observations, and family history/attachments are not implemented yet.
+- Grades are read-only. Writing grades, creating sections/activities, and family
+  history/attachments are not implemented yet.
+- `add_observation`, `mark_homework` and `mark_attendance` save the whole session
+  form the way the page's Guardar button does, replaying every other student
+  unchanged. With `notify_family`, Clickedu itself sends the email on save; the page
+  does not confirm delivery.
 
 ## Agent skills
 
@@ -163,11 +170,13 @@ pick them up from the repo.
 | `clickedu-safata` | missatges rebuts · mi bandeja · xat | read inbox and chat contacts |
 | `clickedu-calendari` | calendari · eventos | calendar events |
 | `clickedu-documents` | documents · arxius · ficheros | documents and files |
+| `clickedu-observacions` | posa una observació · avisa la família · pon una observación | one student's session observation, optional family email (preview → confirm) |
+| `clickedu-deures` | no ha fet els deures · falta de deberes · marca deures | one student's homework for a session (preview → confirm) |
 | `clickedu-tutoria` | resum mensual acumulat · quants retards porta el grup · incidències del grup | class monthly A/AJ/R/RJ and behaviour (read-only) |
 | `clickedu-alumne` | seguiment de l'alumne · dia a dia · quines faltes té · ha fet els deures | one student's day-by-day log (read-only) |
 | `clickedu-avaluacio` | les notes de · apartats i percentatges · notas de la 1ª evaluación | sections, activities, weights and grades (read-only) |
 
-Write skills (`clickedu-assistencia`, `clickedu-retards`, `clickedu-missatges`)
+Write skills (`clickedu-assistencia`, `clickedu-retards`, `clickedu-observacions`, `clickedu-deures`, `clickedu-missatges`)
 encode the per-action preview-then-confirm and the no-bulk / no-impersonation rules.
 
 ## Contributing
