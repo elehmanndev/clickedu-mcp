@@ -741,6 +741,155 @@ def add_tutor_conversation(
     return _ok(preview)
 
 
+def _justify_url(alu: str, d_from: str, d_to: str, all_sessions: bool = False) -> str:
+    return (f"assignatures/assistencia.php?p=justificar_bloc&alum={alu}"
+            f"&ini={d_from.replace('-', '')}&fi={d_to.replace('-', '')}"
+            f"&r=a&v=assignatures_at&mst={1 if all_sessions else 0}")
+
+
+@mcp.tool()
+def justify_absences(
+    alu_id: str,
+    date_from: str,
+    date_to: str = "",
+    keys: list[str] | None = None,
+    include_not_taken: bool = False,
+    note: str = "",
+    confirm: bool = False,
+) -> str:
+    """Justify ONE student's absences and lates in a date range, the way
+    'Detall d'assistència > Justificar en bloc' does in the student file.
+    One student per call; never loops over a class.
+
+    Without confirm=True it lists what can be justified in the range and which
+    items would be, and changes nothing. Each item has a key, date, time, subject
+    and type: "absent" / "late" (unjustified), or with include_not_taken=True
+    also "not_taken" (a session where the teacher did not take the register,
+    shown by the page's eye icon). Call again with confirm=True only after the
+    teacher approves.
+
+    keys picks items from that list; omit it to justify every absent/late item
+    (and not_taken ones if include_not_taken). Justifying a not_taken session
+    records the student as absent-with-justification there; only do it when the
+    teacher says the student was not in class. note is the optional annotation
+    (e.g. "Visita mèdica"). The 'email me a copy' box is never ticked. Dates are
+    YYYY-MM-DD; date_to defaults to date_from. After saving it re-reads the range
+    and reports each item's new state."""
+    from .session import _to_latin9
+
+    alu = str(alu_id).strip()
+    if not alu.isdigit():
+        return _err("alu_id must be numeric.")
+    d_to = date_to or date_from
+    for d in (date_from, d_to):
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", d or ""):
+            return _err("date_from and date_to must be YYYY-MM-DD.")
+    if d_to < date_from:
+        return _err("date_to is before date_from.")
+    s = _s()
+    url = _justify_url(alu, date_from, d_to, all_sessions=include_not_taken)
+    try:
+        html = s.get(url)
+    except LoginError as e:
+        return _err(str(e))
+    err = parse.page_error(html)
+    if err:
+        return _err(f"Clickedu said: {err}")
+    page = parse.parse_justify_bloc(html)
+    if not page.get("found"):
+        return _err("The 'Justificar en bloc' page was not found for this student "
+                    "(only the class tutor can justify in bulk).")
+    allowed = {"absent", "late"} | ({"not_taken"} if include_not_taken else set())
+    items = page["items"]
+    candidates = [i for i in items if i["type"] in allowed]
+    if keys:
+        wanted = {str(k).strip() for k in keys}
+        chosen = [i for i in candidates if i["key"] in wanted]
+        unknown = sorted(wanted - {i["key"] for i in candidates})
+        if unknown:
+            return _err(f"keys not justifiable in this range: {unknown}. "
+                        f"Justifiable: {[i['key'] for i in candidates]}")
+    else:
+        chosen = list(candidates)
+    note = _to_latin9(parse.markdown_to_plain(note or ""))
+
+    def label(i):
+        return f'{i["date"]} {i["start"] or ""} {i["subject"]} ({i["type"]})'.replace("  ", " ")
+
+    preview = {
+        "action": "justify_absences",
+        "student": {"alu_id": alu, "name": page.get("student")},
+        "range": {"from": date_from, "to": d_to},
+        "items": [{k: i[k] for k in ("key", "date", "start", "end", "subject", "type", "type_label")}
+                  for i in candidates],
+        "to_justify": [label(i) for i in chosen],
+        "to_justify_keys": [i["key"] for i in chosen],
+        "left_as_is": [i["key"] for i in candidates if i not in chosen],
+        "note": note or None,
+        "email_copy": False,
+    }
+    if any(i["type"] == "not_taken" for i in chosen):
+        preview["warning"] = ("Some chosen sessions had no register taken; justifying them "
+                              "records the student as justified-absent there.")
+    if not candidates:
+        preview["status"] = "empty"
+        preview["message"] = "Nothing to justify in this range."
+        return _ok(preview)
+    if not confirm:
+        preview["status"] = "preview"
+        preview["message"] = "PREVIEW only. Nothing justified. Call again with confirm=true to apply."
+        return _ok(preview)
+    save = page["save"]
+    if not (save.get("action") and save["hidden"].get("p") == "justificar_bloc_bd"
+            and save["hidden"].get("alum") == alu):
+        return _err("The save form does not look as expected; nothing was changed.")
+    form = []
+    for i in items:  # every row's hidden fields, exactly as the browser sends them
+        n = i["index"]
+        form += [(f"id_{n}", i["hidden"]["id"]), (f"id_sessio_{n}", i["hidden"]["id_sessio"]),
+                 (f"abs_ret_id_{n}", i["hidden"]["abs_ret_id"])]
+    form += [(i["checkbox"], "1") for i in chosen]
+    form += list(save["hidden"].items())
+    if save.get("note_field"):
+        form.append((save["note_field"], note))
+    if save.get("submit"):
+        form.append(save["submit"])
+    try:
+        # full view of every session BEFORE saving, to prove later that rows the
+        # teacher did not pick are untouched
+        before_all = page if include_not_taken else parse.parse_justify_bloc(
+            s.get(_justify_url(alu, date_from, d_to, True)))
+        s.post(save["action"].lstrip("/"), data=form)
+        after_all = parse.parse_justify_bloc(s.get(_justify_url(alu, date_from, d_to, True)))
+    except LoginError as e:
+        return _err(str(e))
+    by_slot = {(i["date"], i["start"], i["subject"]): i for i in after_all.get("items", [])}
+    results = []
+    for i in chosen:
+        now = by_slot.get((i["date"], i["start"], i["subject"]))
+        now_label = now["type_label"] if now else None
+        ok = now is not None and now["type"] == "justified"
+        results.append({"item": label(i), "now": now_label, "ok": ok})
+    # items the teacher did not pick must be exactly as before
+    before_type = {(i["date"], i["start"], i["subject"]): i["type"]
+                   for i in before_all.get("items", [])}
+    untouched = all(
+        by_slot.get(slot, {}).get("type") == t
+        for slot, t in before_type.items()
+        if not any((c["date"], c["start"], c["subject"]) == slot for c in chosen)
+    )
+    verified = all(r["ok"] for r in results) and untouched
+    preview.update({
+        "status": "applied",
+        "applied": True,
+        "verified": verified,
+        "results": results,
+        "others_unchanged": untouched,
+        "message": None if verified else "Sent, but the re-read does not match. Check it in Clickedu.",
+    })
+    return _ok(preview)
+
+
 @mcp.tool()
 def send_message(
     recipient_id: str,

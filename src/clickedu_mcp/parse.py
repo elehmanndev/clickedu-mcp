@@ -320,6 +320,103 @@ def check_session_form(html: str, data: dict) -> str | None:
     return None
 
 
+_ABS_RET = {"1": "absent", "2": "late"}
+
+
+def parse_justify_bloc(html: str) -> dict:
+    """The 'Justificar en bloc' page of one student (assignatures/assistencia.php
+    ?p=justificar_bloc&alum=..&ini=YYYYMMDD&fi=YYYYMMDD&mst=0|1). With mst=0 it
+    lists the unjustified absences and lates; with mst=1 ("mostrar totes les
+    sessions") also every other session of the range, including those where the
+    register was not taken (type "not_taken") and present ones. Each item has a
+    key (the record id, or the session key for sessions without a record), date,
+    time, subject, type and the hidden fields the browser sends for its row.
+
+    The save form's markup is not well nested (it opens inside a table row), so
+    BeautifulSoup closes it early; the fields a browser sends are read from the
+    raw HTML between the form tag and its </form>."""
+    soup = _soup(html)
+    name_el = soup.find("input", attrs={"name": "v_nom_alumne"})
+    student = name_el.get("value") if name_el else None
+    form = soup.find("form", attrs={"name": "frm_act_justificacio_bloc"})
+    if form is None:
+        return {"found": False, "student": student, "items": []}
+    items = []
+    table = form.find("table")
+    for tr in (table.find_all("tr") if table else [])[1:]:
+        tds = tr.find_all("td")
+        chk = tr.find("input", attrs={"type": "checkbox", "name": re.compile(r"^chk_")})
+        # Every row with a checkbox counts, even short ones: a "Present" row has
+        # no annotation cell. Skipping it shifts the row indexes the server
+        # expects, and the save then applies only to the first rows.
+        if not chk or len(tds) < 5:
+            continue
+        rec = tr.find("input", attrs={"name": re.compile(r"^id_\d+$")})
+        sess = tr.find("input", attrs={"name": re.compile(r"^id_sessio_\d+$")})
+        kind = tr.find("input", attrs={"name": re.compile(r"^abs_ret_id_\d+$")})
+        idx = rec.get("name").split("_")[1] if rec else None
+        label = _clean(tds[4].get_text(" "))
+        rec_id = rec.get("value") if rec else ""
+        kind_v = kind.get("value") if kind else ""
+        low = label.lower()
+        if "justificad" in low or "justificat" in low:
+            # already justified: the hidden abs_ret_id still says absent/late
+            typ = "justified"
+        elif kind_v in _ABS_RET:
+            typ = _ABS_RET[kind_v]
+        elif "passat llista" in low:
+            typ = "not_taken"  # the teacher did not take the register
+        elif low.startswith("present"):
+            typ = "present"
+        else:
+            typ = label
+        dm = re.search(r"(\d{2})/(\d{2})/(\d{4})", tds[1].get_text())
+        hm = re.findall(r"(\d{1,2})[.:](\d{2})", tds[2].get_text())
+        items.append({
+            "record_id": rec_id if rec_id and rec_id != "0" else None,
+            "key": rec_id if rec_id and rec_id != "0" else (sess.get("value") if sess else None),
+            "index": idx,
+            "session_id": sess.get("value") if sess else None,
+            "date": f"{dm.group(3)}-{dm.group(2)}-{dm.group(1)}" if dm else _clean(tds[1].get_text()),
+            "start": f"{hm[0][0].zfill(2)}:{hm[0][1]}" if hm else None,
+            "end": f"{hm[1][0].zfill(2)}:{hm[1][1]}" if len(hm) > 1 else None,
+            "subject": _clean(tds[3].get_text(" ")),
+            "type": typ,
+            "type_label": label,
+            "annotation": (_clean(tds[5].get_text(" ")) or None) if len(tds) > 5 else None,
+            "checkbox": chk.get("name"),
+            "hidden": {"id": rec_id or "", "id_sessio": sess.get("value") if sess else "",
+                       "abs_ret_id": kind_v or ""},
+        })
+    # raw save-form fields (see docstring)
+    m = re.search(r'<form[^>]*name="frm_act_justificacio_bloc"[^>]*>(.*?)</form>', html, re.S)
+    raw = m.group(1) if m else ""
+    action_m = re.search(r'<form[^>]*name="frm_act_justificacio_bloc"[^>]*action="([^"]*)"', html) or \
+        re.search(r'<form[^>]*action="([^"]*)"[^>]*name="frm_act_justificacio_bloc"', html)
+    fixed = {}
+    for nm in ("v_nom_alumne", "r", "mst", "p", "alum"):
+        fm = re.search(rf'<input[^>]*name="{nm}"[^>]*value="([^"]*)"', raw)
+        if fm:
+            fixed[nm] = _html_unescape(fm.group(1))
+    return {
+        "found": True,
+        "student": student,
+        "items": items,
+        "save": {
+            "action": action_m.group(1) if action_m else None,
+            "hidden": fixed,
+            "note_field": "v_anotacio" if 'name="v_anotacio"' in raw else None,
+            "email_copy_field": "ind_email" if 'name="ind_email"' in raw else None,
+            "submit": ("Guardar", "Justificar seleccionats") if 'name="Guardar"' in raw else None,
+        },
+    }
+
+
+def _html_unescape(v: str) -> str:
+    import html as _h
+    return _h.unescape(v)
+
+
 HOMEWORK = {"1": "fets", "2": "no fets", "3": "no demanats"}
 
 
