@@ -152,6 +152,72 @@ def parse_session(html: str) -> dict:
 
 
 # --- attendance (read current state from assistencia page) -----------------
+def parse_tutor_conversation_form(html: str) -> dict:
+    """The 'Nova conversa' form of the tutor conversations (conversa_tutor.php).
+
+    Returns the participant checkboxes (the student and each linked parent, with
+    their label and role), the notify checkbox name, the hidden fields, and the
+    form action. Field names are read from the page, never assumed."""
+    soup = _soup(html)
+    form = soup.find("form", attrs={"name": "frm_conv"})
+    if form is None:
+        return {"found": False}
+    participants, notify = [], None
+    for cb in form.find_all("input", attrs={"type": "checkbox"}):
+        name = cb.get("name") or ""
+        label_el = soup.find("label", attrs={"for": cb.get("id")}) if cb.get("id") else None
+        label = _clean(label_el.get_text(" ")) if label_el else ""
+        if "notific" in name.lower() or "notific" in label.lower():
+            notify = name
+            continue
+        m = re.match(r"(.*?)\s*\(([^)]*)\)\s*$", label)
+        participants.append({
+            "field": name,
+            "name": m.group(1) if m else label,
+            "role": (m.group(2) if m else "").replace("/a", "").strip(),
+            "is_student": name == "check_alumne",
+        })
+    hidden = {i.get("name"): i.get("value", "") for i in form.find_all("input", attrs={"type": "hidden"})
+              if i.get("name")}
+    tutor = None
+    for td in form.find_all("td"):
+        if _clean(td.get_text()).startswith("Tutor"):
+            nxt = td.find_next_sibling("td")
+            tutor = _clean(nxt.get_text(" ")) if nxt else None
+            break
+    return {
+        "found": True,
+        "action": form.get("action"),
+        "tutor": tutor,
+        "participants": participants,
+        "notify_field": notify,
+        "hidden": hidden,
+        "title_field": "v_titol" if form.find("input", attrs={"name": "v_titol"}) else None,
+        "text_field": "t_text" if form.find("textarea", attrs={"name": "t_text"}) else None,
+        "submit": {"name": "Guardar", "value": "Guardar"}
+        if form.find("input", attrs={"name": "Guardar"}) else None,
+    }
+
+
+def parse_tutor_conversations(html: str) -> dict:
+    """The 'Converses del tutor' list in the student file (p=comunicacio)."""
+    soup = _soup(html)
+    convs = []
+    for h in soup.find_all(["h2", "h3", "h4", "strong", "legend", "div"]):
+        if _clean(h.get_text()).startswith("Converses del tutor") and len(h.get_text()) < 80:
+            box = h.find_parent(["div", "fieldset"]) or h
+            for a in box.find_all("a", href=re.compile(r"conversa_tutor\.php\?.*accio=(?!crear)")):
+                row = a.find_parent("tr")
+                convs.append({
+                    "title": _clean(a.get_text()) or None,
+                    "href": a.get("href"),
+                    "row": _clean(row.get_text(" "))[:200] if row else None,
+                })
+            break
+    empty = "No hi ha cap conversa" in soup.get_text()
+    return {"conversations": convs, "count": len(convs), "none_message": empty}
+
+
 HOMEWORK = {"1": "fets", "2": "no fets", "3": "no demanats"}
 
 
