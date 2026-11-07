@@ -343,9 +343,13 @@ def mark_attendance(
     motiu = f"cbtn_motiu_{key}"
     just = f"cbtn_just_{key}"
 
-    # Full current form state, then flip only this student.
-    data = parse.collect_form_state(html, "assistencia/index.php")
+    # Full current form state of the attendance form, then flip only this student.
+    data = parse.collect_form_state(html, form_name="frm_assistencia")
+    if not any(k.startswith("rbtn_ar_") for k in data):
+        return _err("Could not read the attendance form; nothing was changed.")
     data["action"] = "guardar_assistencies"
+    data["boto_guardar"] = "guardar"  # what the page's Guardar button adds
+    data["menu_triat"] = ""  # main Assistència view
     before = {
         "status": target["status"],
         "reason": target["reason"],
@@ -400,6 +404,304 @@ def mark_attendance(
             "note": None if verified else "POST sent but re-read did not confirm the change.",
         }
     )
+    return _ok(preview)
+
+
+@mcp.tool()
+def get_session_notes(cgap: str, sessio: str) -> str:
+    """Read, for one class session, the per-student items besides attendance:
+    homework (fets / no fets / no demanats) and its note, the free-text
+    observation, and the other views the school has (Treball, Comportament,
+    mobile use, reading...), with their available options. Also each student's
+    "Enviar correu electrònic" (notify family) checkbox state. Read-only.
+
+    cgap and sessio come from the attendance_link of get_session_detail. View ids
+    are read from the page, so use the ids this tool returns."""
+    c, se = str(cgap).strip(), str(sessio).strip()
+    if not (c.isdigit() and se.isdigit()):
+        return _err("cgap and sessio must be numeric.")
+    return _read(f"assistencia/index.php?cgap={c}&sessio={se}", parse.parse_session_views)
+
+
+def _apply_session_change(c: str, se: str, alu: str, apply, describe: dict,
+                          notify_family: bool, confirm: bool, verify) -> str:
+    """Shared preview/confirm/verify flow for one student's session change.
+
+    apply(data, page) edits the replayed form in place and returns the list of
+    fields it changed. verify(student_after) returns True if the re-read matches.
+    """
+    s = _s()
+    q = f"assistencia/index.php?cgap={c}&sessio={se}"
+    try:
+        html = s.get(q)
+    except LoginError as e:
+        return _err(str(e))
+    err = parse.page_error(html)
+    if err:
+        return _err(f"Clickedu said: {err}")
+    page = parse.parse_session_views(html)
+    student = next((x for x in page["students"] if x["alu_id"] == alu), None)
+    if student is None:
+        return _err(f"Student {alu} not found in this session. Available: "
+                    + ", ".join(f'{x["alu_id"]}={x["name"]}' for x in page["students"][:40]))
+    data = parse.collect_form_state(html, form_name="frm_assistencia")
+    if not any(k.startswith("rbtn_ar_") for k in data):
+        return _err("Could not read the session form; nothing was changed.")
+    data["action"] = "guardar_assistencies"
+    data["boto_guardar"] = "guardar"
+    data["menu_triat"] = ""
+    try:
+        changed = apply(data, page, student)
+    except ValueError as e:
+        return _err(str(e))
+    if notify_family:
+        if not student.get("email_field"):
+            return _err("This student has no 'Enviar correu electrònic' checkbox here.")
+        data[student["email_field"]] = "1"
+        changed.append(student["email_field"])
+    preview = {
+        "student": {"alu_id": alu, "name": student["name"]},
+        "session": {"cgap": c, "sessio": se},
+        **describe,
+        "notify_family_by_email": bool(notify_family),
+        "fields_changed": changed,
+    }
+    if notify_family:
+        preview["warning"] = (
+            "Saving with notify_family sends a real email to this student's "
+            "family from Clickedu."
+        )
+    if not confirm:
+        preview["note"] = "PREVIEW only. Nothing saved or sent. Call again with confirm=true to apply."
+        return _ok(preview)
+    try:
+        s.post(q, data=data)
+    except LoginError as e:
+        return _err(str(e))
+    after = parse.parse_session_views(s.get(q))
+    now = next((x for x in after["students"] if x["alu_id"] == alu), None)
+    verified = bool(now and verify(now))
+    preview.update({
+        "applied": True,
+        "verified": verified,
+        "current_state": now,
+        "note": None if verified else "Sent, but the re-read did not show the change. Check it in Clickedu.",
+    })
+    if notify_family:
+        preview["email_note"] = (
+            "Clickedu sends the email on save; the page does not confirm delivery. "
+            "Check Clickedu's sent messages if needed."
+        )
+    return _ok(preview)
+
+
+@mcp.tool()
+def add_observation(
+    cgap: str,
+    sessio: str,
+    alu_id: str,
+    text: str,
+    notify_family: bool = False,
+    confirm: bool = False,
+) -> str:
+    """Write ONE student's free-text observation ('Observacions') for ONE
+    session, optionally ticking "Enviar correu electrònic" so Clickedu emails the
+    family. Single action only.
+
+    Without confirm=True it returns a PREVIEW (session, student, the current and
+    new text, whether the family gets an email) and changes nothing. Call again
+    with confirm=True only after the teacher approves. Every other student's
+    attendance, homework and observations are replayed unchanged.
+
+    The text replaces this student's observation for this session; to add to an
+    existing one, include the existing text (shown in the preview)."""
+    c, se, alu = str(cgap).strip(), str(sessio).strip(), str(alu_id).strip()
+    if not (c.isdigit() and se.isdigit() and alu.isdigit()):
+        return _err("cgap, sessio and alu_id must be numeric.")
+    text = (text or "").strip()
+    if not text:
+        return _err("text is required.")
+    holder = {}
+
+    def apply(data, page, student):
+        view = next((v for v in page["views"] if v["kind"] == "text"), None)
+        if view is None:
+            raise ValueError("This session page has no free-text observation view.")
+        field = f'param_{view["id"]}_{alu}'
+        if field not in data:
+            raise ValueError(f"Observation field {field} not found for this student.")
+        holder["view"], holder["before"] = view, data[field]
+        data[field] = text
+        return [field]
+
+    # apply() runs inside the shared flow, so view and 'before' text are known
+    # only after it returns; they are added to the answer here.
+    result = _apply_session_change(
+        c, se, alu, apply, {}, notify_family, confirm,
+        verify=lambda now: (now["views"].get(holder["view"]["id"]) or "").strip() == text,
+    )
+    out = json.loads(result)
+    if "error" not in out:
+        out = {"action": "add_observation",
+               "view": holder["view"]["name"],
+               "observation": {"before": holder["before"], "after": text},
+               **out}
+    return _ok(out)
+
+
+@mcp.tool()
+def mark_homework(
+    cgap: str,
+    sessio: str,
+    alu_id: str,
+    status: str = "no fets",
+    note: str = "",
+    notify_family: bool = False,
+    confirm: bool = False,
+) -> str:
+    """Set ONE student's homework ('Deures') for ONE session: "fets", "no fets"
+    or "no demanats", with an optional homework note, and optionally tick
+    "Enviar correu electrònic" so Clickedu emails the family. Single action only.
+
+    Without confirm=True it returns a PREVIEW and changes nothing; call again
+    with confirm=True only after the teacher approves. Every other student's data
+    is replayed unchanged. An empty note keeps the existing homework note."""
+    c, se, alu = str(cgap).strip(), str(sessio).strip(), str(alu_id).strip()
+    if not (c.isdigit() and se.isdigit() and alu.isdigit()):
+        return _err("cgap, sessio and alu_id must be numeric.")
+    wanted = (status or "").strip().lower()
+    value = next((k for k, v in parse.HOMEWORK.items() if v == wanted), None)
+    if value is None:
+        return _err('status must be "fets", "no fets" or "no demanats".')
+    holder = {}
+
+    def apply(data, page, student):
+        if not any(v["id"] == "deures" for v in page["views"]):
+            raise ValueError("This session page has no Deures view.")
+        field = f"deures_{alu}"
+        holder["before"] = {"status": student.get("homework"), "note": student.get("homework_note")}
+        data[field] = value
+        changed = [field]
+        # The note textarea is disabled until a homework option is ticked; once
+        # ticked the browser sends it, so send the new note or the existing one.
+        new_note = note.strip() or (student.get("homework_note") or "")
+        data[f"deures_{alu}_obs"] = new_note
+        if note.strip():
+            changed.append(f"deures_{alu}_obs")
+        return changed
+
+    result = _apply_session_change(
+        c, se, alu, apply, {}, notify_family, confirm,
+        verify=lambda now: now.get("homework") == wanted,
+    )
+    out = json.loads(result)
+    if "error" not in out:
+        out = {"action": "mark_homework",
+               "homework": {"before": holder["before"],
+                            "after": {"status": wanted, "note": note.strip() or holder["before"]["note"]}},
+               **out}
+    return _ok(out)
+
+
+@mcp.tool()
+def add_tutor_conversation(
+    alu_id: str,
+    title: str,
+    text: str,
+    participants: list[str] | None = None,
+    confirm: bool = False,
+) -> str:
+    """Record ONE tutor conversation (an interview summary) in a student's file:
+    'Comunicació > Converses del tutor > Nova', with a title and a message, and
+    the participants ticked. Only the student's tutor can do this.
+
+    The 'Notificar als participants' box is NEVER ticked: nobody is emailed.
+
+    participants: who took part, matched against the names or roles on the form
+    ("alumne", "pare", "mare", or a name). Omit it to tick everyone listed (the
+    student and every linked parent); the preview shows who is ticked.
+
+    Without confirm=True it returns a PREVIEW (student, participants, title, text)
+    and saves nothing. Call again with confirm=True only after the teacher
+    approves. alu_id comes from get_roster of the tutor's class."""
+    alu = str(alu_id).strip()
+    if not alu.isdigit():
+        return _err("alu_id must be numeric.")
+    title, text = (title or "").strip(), (text or "").strip()
+    if not title or not text:
+        return _err("title and text are both required.")
+    if len(title) > 255:
+        return _err("title is longer than 255 characters.")
+    s = _s()
+    form_path = f"assignatures/conversa_tutor.php?accio=crear&alum={alu}"
+    try:
+        html = s.get(form_path)
+    except LoginError as e:
+        return _err(str(e))
+    err = parse.page_error(html)
+    if err:
+        return _err(f"Clickedu said: {err}")
+    form = parse.parse_tutor_conversation_form(html)
+    if not form.get("found") or not form.get("title_field") or not form.get("text_field"):
+        return _err("The 'Nova conversa' form was not found for this student "
+                    "(only the class tutor can add tutor conversations).")
+    people = form["participants"]
+    if not people:
+        return _err("The form lists no participants for this student.")
+    if participants:
+        wanted = [p.strip().lower() for p in participants if p and p.strip()]
+        chosen = [p for p in people
+                  if any(w in p["name"].lower() or w == p["role"].lower()
+                         or (w in ("alumne", "alumna", "alumno", "student") and p["is_student"])
+                         for w in wanted)]
+        missing = [w for w in wanted
+                   if not any(w in p["name"].lower() or w == p["role"].lower()
+                              or (w in ("alumne", "alumna", "alumno", "student") and p["is_student"])
+                              for p in people)]
+        if missing:
+            return _err(f"No participant matches {missing}. On the form: "
+                        + ", ".join(f'{p["name"]} ({p["role"]})' for p in people))
+    else:
+        chosen = people
+    data = dict(form["hidden"])
+    for p in chosen:
+        data[p["field"]] = "1"
+    # The notify box is deliberately never sent (unticked).
+    data[form["title_field"]] = title
+    data[form["text_field"]] = text
+    if form.get("submit"):
+        data[form["submit"]["name"]] = form["submit"]["value"]
+    preview = {
+        "action": "add_tutor_conversation",
+        "student_id": alu,
+        "tutor": form.get("tutor"),
+        "participants": [f'{p["name"]} ({p["role"]})' for p in chosen],
+        "not_ticked": [f'{p["name"]} ({p["role"]})' for p in people if p not in chosen],
+        "notify_participants": False,
+        "title": title,
+        "text": text,
+    }
+    if not confirm:
+        preview["note"] = "PREVIEW only. Nothing saved. Call again with confirm=true to save."
+        return _ok(preview)
+    list_path = f"assignatures/fitxa_alumne.php?alum={alu}&p=comunicacio"
+    try:
+        before = parse.parse_tutor_conversations(s.get(list_path))
+        action = form["action"] or ""
+        if not action.startswith("conversa_tutor.php?accio=insert_bd"):
+            return _err(f"Unexpected form action {action!r}; nothing was saved.")
+        s.post("assignatures/" + action, data=data)  # relative to assignatures/
+        after_html = s.get(list_path)
+    except LoginError as e:
+        return _err(str(e))
+    after = parse.parse_tutor_conversations(after_html)
+    verified = after["count"] > before["count"] or (
+        before["none_message"] and not after["none_message"] and title in after_html)
+    preview.update({
+        "applied": True,
+        "verified": bool(verified),
+        "note": None if verified else "Sent, but the conversation does not appear yet in the student's file. Check it in Clickedu.",
+    })
     return _ok(preview)
 
 

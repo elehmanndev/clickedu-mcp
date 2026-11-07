@@ -38,6 +38,17 @@ save action. Writes validate inputs, reject non-numeric IDs, replay the
 full form so only the target row changes, and verify the result by re-reading.
 Keep that pattern for new writes, and keep the preview/`confirm` gate.
 
+The session page (`assistencia/index.php`) is one big form, `frm_assistencia`,
+holding attendance, homework, observations and the other views. Session writes go
+through `_apply_session_change()`: it replays the whole form with
+`collect_form_state(form_name="frm_assistencia")` (which mirrors what a browser
+submits: no disabled fields, first option of an unselected select), adds
+`boto_guardar=guardar` like the page's Guardar button, edits only the target
+student's fields, and verifies by re-reading. Find forms by name, not by action:
+this form's action is empty. View ids (Observacions is 8 in one school) are read
+from the page menu, never hardcoded. Ticking `cbtn_mail_*` makes Clickedu email
+the family on save, so any write that offers it must say so in its preview.
+
 ## Skills
 
 Each skill is a directory under `skills/` with a `SKILL.md`. Conventions:
