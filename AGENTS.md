@@ -84,10 +84,10 @@ and its scripts (`jquery_actions.js`, `jquery_calculation.js`,
 - Saving does not recalculate section or final grades: that is a separate
   `do=CalculateStudents` call behind the "calcular" button. "Guardar i tancar
   materia" (`do=SaveClose`) locks the subject; never call it.
-- As of 2026-11-19 the preview path is validated on a real account; a real
-  `confirm=true` save has not been run yet, so the `do=Save` answer shape is
-  read from the script, not observed. Test one grade (and restore it) before
-  relying on it.
+- Validated on a real account on 2026-11-19: one `confirm=true` save of a new
+  activity grade answered JSON with `msg` "Guardat correctament" and `error`
+  not 1, the re-read showed the new value, and a
+  before/after diff of the whole GetGrades list changed only that one cell.
 
 ## Skills
 
