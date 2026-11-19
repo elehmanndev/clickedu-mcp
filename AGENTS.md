@@ -7,7 +7,7 @@ handles students' data, so keep that in mind in every change.
 ## Ground rules
 
 - **Reads are free; every write is one explicit, teacher-confirmed action.** The
-  write tools (`mark_attendance`, `send_message`) return a preview first and only
+  write tools (`mark_attendance`, `set_grade`, `send_message`...) return a preview first and only
   POST when called again with `confirm=true`. Never add bulk writes, loops over a
   class, scheduled runs, or student impersonation (`popup_suplantar_alu`).
 - **No credentials in code, tests, fixtures, logs, or commit messages.** Secrets
@@ -53,6 +53,41 @@ present has no checked attendance radio and is valid. Find forms by name, not by
 this form's action is empty. View ids (Observacions is 8 in one school) are read
 from the page menu, never hardcoded. Ticking `cbtn_mail_*` makes Clickedu email
 the family on save, so any write that offers it must say so in its preview.
+
+The grades page (`go/Index.php?ctr=Evaluate/EvaluateTermly&id=<subject_id>`, the
+"Avaluar" page) is not a classic form replay. Its findings, read from the page
+and its scripts (`jquery_actions.js`, `jquery_calculation.js`,
+`recuperar_notes.js` under `assets.clickedu.eu/go/js/Evaluate/EvaluateTermly/`):
+
+- Grades load as a JSON list from `&do=GetGrades&id=<subject_id>&&trm=<term>`,
+  one object per cell: `id_criteri` (item id; the subject id for the final grade),
+  `type` (0 activity or section, 114 final, 120 recuperacio, others in
+  `recuperar_notes.js`), `id_alumne`, `nota`, `nota_mod` (the value the teacher
+  entered), `text`, `id_quantifier`. Missing cells have no object.
+- Editing a cell only changes `nota_mod` in that list (`updateGrade`); a new cell
+  appends the object `generateGradeObject` builds (with `id_avaluacio` = `trmId`
+  and `id_classes_grups_assignatures_professor` = `cgapId`, both page variables).
+- Guardar first GETs `ctr=Evaluate/EvaluateAjax&do=checkSaveRegister` with `id`,
+  `trm` and the ISO `timestamp` of the page load. `saveAnteriorCheck` "0" means
+  nobody saved since; anything else means another tab saved later, and
+  `set_grade` stops instead of overwriting.
+- Then it POSTs the whole list as `grades` (JSON string) and `evalInfo` to the
+  `FormEvaluate` action (`do=Save&id=<subject_id>&trm=<term>`). The answer is JSON
+  `{error, msg}`. Before the save the page also folds per-student textarea text
+  into the list (`saveTextObservations`), so `set_grade` refuses pages with such
+  textareas rather than risk dropping them.
+- Cell inputs are `evalObject_<alu>_<item>_<type>`; only `InputEdit InputGrades`
+  without `disabled` are editable, and `min`/`max` (or the select options for the
+  final grade) bound the value. Formatting follows `formatGrade`: page variables
+  `tipusNotaItems` (E integer, D two decimals) and `tipusNotaFinalFormatCalcul`
+  (TFNF integer, ND `finalGradeDecimals`).
+- Saving does not recalculate section or final grades: that is a separate
+  `do=CalculateStudents` call behind the "calcular" button. "Guardar i tancar
+  materia" (`do=SaveClose`) locks the subject; never call it.
+- As of 2026-11-19 the preview path is validated on a real account; a real
+  `confirm=true` save has not been run yet, so the `do=Save` answer shape is
+  read from the script, not observed. Test one grade (and restore it) before
+  relying on it.
 
 ## Skills
 

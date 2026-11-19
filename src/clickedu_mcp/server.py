@@ -296,6 +296,220 @@ def get_monthly_attendance(class_id: str, months: list[str] | None = None) -> st
 # =====================================================================
 # WRITE TOOLS (gated: preview unless confirm=True; single action only)
 # =====================================================================
+
+# The 'Avaluar' page keeps every grade of the subject and term in one JSON list
+# (GetGrades) and its Guardar button posts that whole list back to do=Save. A
+# browser edit only changes one entry of the list; set_grade does the same.
+_GRADE_FINAL_TYPES = {"114", "120"}  # final grade, recuperacio (formatGrade in recuperar_notes.js)
+
+def _grade_page(sid: str, trm: str) -> dict:
+    """Read everything one grade edit needs: the page, its save action and
+    settings, the editable cell inputs, and the current GetGrades list."""
+    from datetime import datetime, timezone
+
+    s = _s()
+    q = f"go/Index.php?ctr=Evaluate/EvaluateTermly&id={sid}" + (f"&trm={trm}" if trm else "")
+    page = s.get(q)
+    err = parse.page_error(page)
+    if err:
+        raise ValueError(f"Clickedu said: {err}")
+    # Timestamp of this read; Clickedu compares it with later saves (checkSaveRegister).
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + "000Z"
+    grades = json.loads(s.get(
+        f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GetGrades&id={sid}&&trm={trm}") or "[]")
+    if not isinstance(grades, list):
+        raise ValueError("GetGrades did not return a list.")
+    m = re.search(r'<form[^>]*action="([^"]*do=Save&[^"]*)"[^>]*id="FormEvaluate"', page)
+    if not m:
+        raise ValueError("The Avaluar page has no FormEvaluate save form.")
+    # Free-text cells (observations) are folded into the save by the page's own
+    # script; replaying GetGrades alone could drop them, so stay out of those pages.
+    if re.search(r"<textarea[^>]*attr-student", page):
+        raise ValueError("This subject has per-student text fields in the Avaluar page; "
+                         "set grades there in Clickedu.")
+    def var(name):
+        v = re.search(rf"var {name}\s*=\s*\"?([^\";\n]*)\"?;", page)
+        return v.group(1) if v else ""
+    return {
+        "page": page,
+        "save": m.group(1).replace("&amp;", "&").replace("../", ""),
+        "stamp": stamp,
+        "grades": grades,
+        "trm_id": var("trmId"),
+        "cgap_id": var("cgapId"),
+        "item_format": var("tipusNotaItems"),      # E integer, D two decimals
+        "final_format": var("tipusNotaFinalFormatCalcul"),
+        "final_decimals": var("finalGradeDecimals"),
+    }
+
+def _grade_cell(page: str, alu: str, item: str) -> dict | None:
+    """The editable input or select for one student and item, as the page shows it."""
+    from bs4 import BeautifulSoup
+
+    soup = BeautifulSoup(page, "lxml")
+    for el in soup.select(f'[name^="evalObject_{alu}_{item}_"]'):
+        cls = el.get("class") or []
+        if "InputEdit" not in cls or "InputGrades" not in cls or el.has_attr("disabled"):
+            continue
+        return {
+            "type": el.get("attr-type"),
+            "min": el.get("min"), "max": el.get("max"),
+            "options": [o.get("value") for o in el.find_all("option") if o.get("value")]
+            if el.name == "select" else None,
+        }
+    return None
+
+def _format_grade(raw: str, cell: dict, info: dict):
+    """Validate and format a grade the way the page's formatGrade() does."""
+    if raw == "":
+        return ""
+    if cell["options"] is not None:
+        if raw not in cell["options"]:
+            raise ValueError(f"grade must be one of {cell['options']}.")
+        return raw
+    try:
+        val = float(raw.replace(",", "."))
+    except ValueError:
+        raise ValueError("grade must be a number.") from None
+    lo = float(cell["min"]) if cell["min"] else None
+    hi = float(cell["max"]) if cell["max"] else None
+    if (lo is not None and val < lo) or (hi is not None and val > hi):
+        raise ValueError(f"grade must be between {cell['min']} and {cell['max']}.")
+    if cell["type"] in _GRADE_FINAL_TYPES:
+        if info["final_format"] == "TFNF":
+            return int(val)
+        if info["final_format"] == "ND":
+            return f"{val:.{int(info['final_decimals'] or 2)}f}"
+        return raw
+    if info["item_format"] == "E":
+        if val != int(val):
+            raise ValueError("this subject takes whole-number grades.")
+        return int(val)
+    if info["item_format"] == "D":
+        return f"{val:.2f}"
+    return raw
+
+def _same_grade(a, b) -> bool:
+    if a in (None, "") or b in (None, ""):
+        return a in (None, "") and b in (None, "")
+    try:
+        return abs(float(a) - float(b)) < 1e-9
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+@mcp.tool()
+def set_grade(
+    subject_id: str,
+    alu_id: str,
+    item: str,
+    grade: str,
+    term_id: str = "",
+    confirm: bool = False,
+) -> str:
+    """Set ONE grade for ONE student in the 'Avaluar' page of one subject and
+    term: one activity or section (item = its item_id or code, as get_evaluation
+    lists them, or "final" for the final grade). grade "" clears it. Single
+    action only, like typing in one cell and pressing Guardar (not "Guardar i
+    tancar"); every other grade is posted back unchanged.
+
+    Without confirm=True it returns a PREVIEW and changes nothing; call again
+    with confirm=True only after the teacher approves. Clickedu does not
+    recalculate section or final grades on save; that is the page's 'calcular'
+    button, which this tool does not press. If the page was saved elsewhere after
+    this read, the write stops instead of overwriting."""
+    sid, alu, trm = str(subject_id).strip(), str(alu_id).strip(), str(term_id).strip()
+    if not (sid.isdigit() and alu.isdigit()) or (trm and not trm.isdigit()):
+        return _err("subject_id, alu_id and term_id must be numeric.")
+    raw = str(grade).strip()
+    try:
+        info = _grade_page(sid, trm)
+        structure = parse.parse_evaluation_structure(info["page"])
+    except LoginError as e:
+        return _err(f"login: {e}")
+    except (ValueError, json.JSONDecodeError) as e:
+        return _err(str(e))
+    student = next((x for x in structure["students"] if x["alu_id"] == alu), None)
+    if not student:
+        return _err("That student is not on this subject's Avaluar page.")
+    key = str(item).strip()
+    if key.lower() == "final":
+        it = {"item_id": sid, "code": "final", "name": "Nota final"}
+    else:
+        hits = [i for i in structure["items"]
+                if key == i["item_id"] or (i["code"] and key.lower() == i["code"].lower())]
+        if len(hits) != 1:
+            return _err(f"item '{key}' matches {len(hits)} sections/activities; "
+                        "use the item_id from get_evaluation.")
+        it = hits[0]
+    cell = _grade_cell(info["page"], alu, it["item_id"])
+    if not cell:
+        return _err("That grade is not editable on the Avaluar page (calculated or locked).")
+    try:
+        new = _format_grade(raw, cell, info)
+    except ValueError as e:
+        return _err(str(e))
+
+    grades = info["grades"]
+    idx = next((n for n, g in enumerate(grades)
+                if str(g.get("id_alumne")) == alu and str(g.get("id_criteri")) == it["item_id"]
+                and str(g.get("type")) == cell["type"]), None)
+    before = grades[idx].get("nota_mod") if idx is not None else None
+    preview = {
+        "action": "set_grade",
+        "subject": structure.get("subject"), "course": structure.get("course"),
+        "term": structure.get("term"),
+        "student": student["name"], "alu_id": alu,
+        "item": {"item_id": it["item_id"], "code": it.get("code"), "name": it.get("name")},
+        "grade": {"before": before, "after": new},
+        "note": "Section and final grades are not recalculated by this save.",
+    }
+    if _same_grade(before, new):
+        return _ok({**preview, "done": False, "result": "unchanged, nothing to save"})
+    if not confirm:
+        return _ok({**preview, "done": False,
+                    "confirm": "Call again with confirm=true to save this one grade."})
+
+    s = _s()
+    try:
+        chk = json.loads(s.get(
+            f"go/Index.php?ctr=Evaluate/EvaluateAjax&do=checkSaveRegister&id={sid}"
+            f"&timestamp={info['stamp']}&trm={trm}") or "{}")
+    except (LoginError, json.JSONDecodeError) as e:
+        return _err(f"could not check for other saves: {e}")
+    if str(chk.get("saveAnteriorCheck", "1")) != "0":
+        return _err("These grades were saved somewhere else after this read; "
+                    "nothing was written. Run set_grade again to see the current value.")
+    if idx is not None:
+        grades[idx]["nota_mod"] = new
+    else:  # same object the page's generateGradeObject() builds for a new cell
+        grades.append({
+            "id_criteri": it["item_id"], "id_avaluacio": info["trm_id"],
+            "id_classes_grups_assignatures_professor": info["cgap_id"],
+            "type": cell["type"], "id_alumne": alu, "nota": None, "nota_mod": new,
+            "nota_actitud": None, "no_avaluat": None, "ind_acta": None, "text": None,
+            "observacions_butlleti": None, "observacions_tutor": None,
+            "id_quantifier": None, "text_observacio": None,
+        })
+    try:
+        resp = s.post(info["save"], data={"grades": json.dumps(grades, separators=(",", ":")),
+                                          "evalInfo": ""})
+        after = json.loads(s.get(
+            f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GetGrades&id={sid}&&trm={trm}") or "[]")
+    except LoginError as e:
+        return _err(f"login: {e}")
+    except json.JSONDecodeError:
+        return _err("Saved, but the grades could not be re-read to verify; check Clickedu.")
+    try:
+        msg = json.loads(resp)
+    except json.JSONDecodeError:
+        msg = {"error": 1, "msg": (parse.page_error(resp) or resp[:200])}
+    now = next((g.get("nota_mod") for g in after
+                if str(g.get("id_alumne")) == alu and str(g.get("id_criteri")) == it["item_id"]
+                and str(g.get("type")) == cell["type"]), None)
+    return _ok({**preview, "done": True,
+                "clickedu": msg.get("msg"), "clickedu_error": str(msg.get("error")) == "1",
+                "verified": _same_grade(now, new), "now": now})
+
 @mcp.tool()
 def mark_attendance(
     cgap: str,
