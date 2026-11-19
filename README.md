@@ -84,6 +84,7 @@ Write (gated — preview first, then `confirm=true`):
 | `mark_homework(cgap, sessio, alu_id, status, note, notify_family, confirm)` | set one student's homework `fets` / `no fets` / `no demanats` for one session |
 | `add_tutor_conversation(alu_id, title, text, participants, confirm)` | record one interview summary in a tutored student's file (Converses del tutor); participants ticked, never notified |
 | `justify_absences(alu_id, date_from, date_to, keys, include_not_taken, note, confirm)` | justify one tutored student's absences/lates in a date range (Justificar en bloc); optionally also sessions where the register was not taken |
+| `set_grade(subject_id, alu_id, item, grade, term_id, confirm)` | set or clear one student's grade for one activity, section or the final grade (Avaluar, Guardar); sections and final are not recalculated |
 | `send_message(recipient_id, subject, body, confirm)` | send one message to one recipient |
 
 `mark_attendance` re-reads the whole session form and flips only the one student, so
@@ -178,9 +179,9 @@ pick them up from the repo.
 | `clickedu-deures` | no ha fet els deures · falta de deberes · marca deures | one student's homework for a session (preview → confirm) |
 | `clickedu-tutoria` | resum mensual acumulat · quants retards porta el grup · incidències del grup | class monthly A/AJ/R/RJ and behaviour (read-only) |
 | `clickedu-alumne` | seguiment de l'alumne · dia a dia · quines faltes té · ha fet els deures | one student's day-by-day log (read-only) |
-| `clickedu-avaluacio` | les notes de · apartats i percentatges · notas de la 1ª evaluación | sections, activities, weights and grades (read-only) |
+| `clickedu-avaluacio` | les notes de · posa-li un 7 a · ponle un 7 en · notas de la 1ª evaluación | sections, activities, weights and grades; one grade at a time (preview → confirm) |
 
-Write skills (`clickedu-assistencia`, `clickedu-retards`, `clickedu-observacions`, `clickedu-deures`, `clickedu-converses`, `clickedu-justificar`, `clickedu-missatges`)
+Write skills (`clickedu-assistencia`, `clickedu-retards`, `clickedu-observacions`, `clickedu-deures`, `clickedu-converses`, `clickedu-justificar`, `clickedu-avaluacio`, `clickedu-missatges`)
 encode the per-action preview-then-confirm and the no-bulk / no-impersonation rules.
 
 ## Contributing
