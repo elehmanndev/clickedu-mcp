@@ -397,6 +397,52 @@ def _same_grade(a, b) -> bool:
     except (TypeError, ValueError):
         return str(a) == str(b)
 
+def _find_grade(grades: list, alu: str, item: str, typ: str) -> dict:
+    return next((g for g in grades if str(g.get("id_alumne")) == alu
+                 and str(g.get("id_criteri")) == str(item) and str(g.get("type")) == str(typ)), {})
+
+def _new_grade_object(info: dict, item: str, typ: str, alu: str, **fields) -> dict:
+    """The object the page's generateGradeObject() builds for a cell that has
+    no entry in GetGrades yet."""
+    obj = {
+        "id_criteri": item, "id_avaluacio": info["trm_id"],
+        "id_classes_grups_assignatures_professor": info["cgap_id"],
+        "type": typ, "id_alumne": alu, "nota": None, "nota_mod": None,
+        "nota_actitud": None, "no_avaluat": None, "ind_acta": None, "text": None,
+        "observacions_butlleti": None, "observacions_tutor": None,
+        "id_quantifier": None, "text_observacio": None,
+    }
+    obj.update(fields)
+    return obj
+
+def _save_grades(sid: str, trm: str, info: dict, grades: list) -> dict:
+    """Press Guardar: refuse if the page was saved elsewhere after info was read,
+    post the whole list, and re-read it. Returns msg/clickedu_error/after, or error."""
+    s = _s()
+    try:
+        chk = json.loads(s.get(
+            f"go/Index.php?ctr=Evaluate/EvaluateAjax&do=checkSaveRegister&id={sid}"
+            f"&timestamp={info['stamp']}&trm={trm}") or "{}")
+    except (LoginError, json.JSONDecodeError) as e:
+        return {"error": f"could not check for other saves: {e}"}
+    if str(chk.get("saveAnteriorCheck", "1")) != "0":
+        return {"error": "These grades were saved somewhere else after this read; "
+                         "nothing was written. Run the tool again to see the current values."}
+    try:
+        resp = s.post(info["save"], data={"grades": json.dumps(grades, separators=(",", ":")),
+                                          "evalInfo": ""})
+        after = json.loads(s.get(
+            f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GetGrades&id={sid}&&trm={trm}") or "[]")
+    except LoginError as e:
+        return {"error": f"login: {e}"}
+    except json.JSONDecodeError:
+        return {"error": "Saved, but the grades could not be re-read to verify; check Clickedu."}
+    try:
+        msg = json.loads(resp)
+    except json.JSONDecodeError:
+        msg = {"error": 1, "msg": (parse.page_error(resp) or resp[:200])}
+    return {"msg": msg.get("msg"), "clickedu_error": str(msg.get("error")) == "1", "after": after}
+
 @mcp.tool()
 def set_grade(
     subject_id: str,
@@ -469,46 +515,183 @@ def set_grade(
         return _ok({**preview, "done": False,
                     "confirm": "Call again with confirm=true to save this one grade."})
 
-    s = _s()
-    try:
-        chk = json.loads(s.get(
-            f"go/Index.php?ctr=Evaluate/EvaluateAjax&do=checkSaveRegister&id={sid}"
-            f"&timestamp={info['stamp']}&trm={trm}") or "{}")
-    except (LoginError, json.JSONDecodeError) as e:
-        return _err(f"could not check for other saves: {e}")
-    if str(chk.get("saveAnteriorCheck", "1")) != "0":
-        return _err("These grades were saved somewhere else after this read; "
-                    "nothing was written. Run set_grade again to see the current value.")
     if idx is not None:
         grades[idx]["nota_mod"] = new
-    else:  # same object the page's generateGradeObject() builds for a new cell
-        grades.append({
-            "id_criteri": it["item_id"], "id_avaluacio": info["trm_id"],
-            "id_classes_grups_assignatures_professor": info["cgap_id"],
-            "type": cell["type"], "id_alumne": alu, "nota": None, "nota_mod": new,
-            "nota_actitud": None, "no_avaluat": None, "ind_acta": None, "text": None,
-            "observacions_butlleti": None, "observacions_tutor": None,
-            "id_quantifier": None, "text_observacio": None,
-        })
+    else:
+        grades.append(_new_grade_object(info, it["item_id"], cell["type"], alu, nota_mod=new))
+    res = _save_grades(sid, trm, info, grades)
+    if "error" in res:
+        return _err(res["error"])
+    now = _find_grade(res["after"], alu, it["item_id"], cell["type"]).get("nota_mod")
+    return _ok({**preview, "done": True, "clickedu": res["msg"],
+                "clickedu_error": res["clickedu_error"],
+                "verified": _same_grade(now, new), "now": now})
+
+def _student_or_error(structure: dict, alu: str):
+    return next((x for x in structure["students"] if x["alu_id"] == alu), None)
+
+@mcp.tool()
+def calculate_grades(
+    subject_id: str,
+    alu_id: str,
+    term_id: str = "",
+    confirm: bool = False,
+) -> str:
+    """Recalculate ONE student's section and final grades in the 'Avaluar' page
+    (the per-student 'calcular' button) and save the result (Guardar). Clickedu
+    computes the values from the grades already entered and the weights; this
+    tool only stores what Clickedu computed. Single student only.
+
+    Without confirm=True it returns a PREVIEW of the computed values next to the
+    stored ones and saves nothing; call again with confirm=True only after the
+    teacher approves. The final grade the teacher chose by hand (the final select)
+    is left as it is; only the calculated value next to it changes."""
+    sid, alu, trm = str(subject_id).strip(), str(alu_id).strip(), str(term_id).strip()
+    if not (sid.isdigit() and alu.isdigit()) or (trm and not trm.isdigit()):
+        return _err("subject_id, alu_id and term_id must be numeric.")
     try:
-        resp = s.post(info["save"], data={"grades": json.dumps(grades, separators=(",", ":")),
-                                          "evalInfo": ""})
-        after = json.loads(s.get(
-            f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GetGrades&id={sid}&&trm={trm}") or "[]")
+        info = _grade_page(sid, trm)
+        structure = parse.parse_evaluation_structure(info["page"])
+    except LoginError as e:
+        return _err(f"login: {e}")
+    except (ValueError, json.JSONDecodeError) as e:
+        return _err(str(e))
+    student = _student_or_error(structure, alu)
+    if not student:
+        return _err("That student is not on this subject's Avaluar page.")
+    grades = info["grades"]
+    mine = [g for g in grades if str(g.get("id_alumne")) == alu]
+    calc_url = (f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=CalculateStudents"
+                f"&id={sid}&trm={trm or info['trm_id']}")
+    try:
+        calc = json.loads(_s().post(calc_url, data={"grades": json.dumps(mine)}) or "[]")
     except LoginError as e:
         return _err(f"login: {e}")
     except json.JSONDecodeError:
-        return _err("Saved, but the grades could not be re-read to verify; check Clickedu.")
+        return _err("Clickedu did not return calculated grades for this student.")
+    names = {i["item_id"]: (i["code"] or i["name"]) for i in structure["items"]}
+    names[sid] = "final"
+    changes = []
+    for c in calc if isinstance(calc, list) else []:
+        if "nota" not in c or str(c.get("id_alumne")) != alu:
+            continue  # entries without "nota" echo grades the teacher typed
+        item, typ = str(c.get("id_criteri")), str(c.get("type"))
+        before = _find_grade(grades, alu, item, typ).get("nota")
+        if _same_grade(before, c["nota"]):
+            continue
+        changes.append({"item_id": item, "type": typ, "item": names.get(item, item),
+                        "before": before, "after": c["nota"], "text": c.get("text")})
+    preview = {
+        "action": "calculate_grades",
+        "subject": structure.get("subject"), "course": structure.get("course"),
+        "term": structure.get("term"), "student": student["name"], "alu_id": alu,
+        "calculated": [{k: ch[k] for k in ("item", "before", "after")} for ch in changes],
+    }
+    if not changes:
+        return _ok({**preview, "done": False, "result": "already up to date, nothing to save"})
+    if not confirm:
+        return _ok({**preview, "done": False,
+                    "confirm": "Call again with confirm=true to save these calculated grades."})
+    for ch in changes:  # what the page's updateCalcGrade() does before Guardar
+        g = _find_grade(grades, alu, ch["item_id"], ch["type"])
+        if g:
+            g["nota"] = ch["after"]
+        else:
+            grades.append(_new_grade_object(info, ch["item_id"], ch["type"], alu,
+                                            nota=ch["after"], text=ch["text"]))
+    res = _save_grades(sid, trm, info, grades)
+    if "error" in res:
+        return _err(res["error"])
+    ok = all(_same_grade(_find_grade(res["after"], alu, ch["item_id"], ch["type"]).get("nota"),
+                         ch["after"]) for ch in changes)
+    return _ok({**preview, "done": True, "clickedu": res["msg"],
+                "clickedu_error": res["clickedu_error"], "verified": ok})
+
+_REMARK_BLOCKS = {"observacions": "114", "aspectes": "123"}
+_REMARK_KINDS = {"butlleti": ("observacions_butlleti", "ObservacionsButlleti"),
+                 "tutor": ("observacions_tutor", "ObservacionsTutor")}
+
+@mcp.tool()
+def set_subject_remark(
+    subject_id: str,
+    alu_id: str,
+    text: str,
+    kind: str = "butlleti",
+    block: str = "observacions",
+    term_id: str = "",
+    confirm: bool = False,
+) -> str:
+    """Write ONE student's subject remark for one term, in the 'Observacions
+    de les notes' page of the subject (the remarks that go to the report card or
+    to the tutor). Replaces that one text; every other remark and grade is posted
+    back unchanged. text "" clears it.
+
+    kind: "butlleti" (Observacions per al butlletí, printed on the report card
+    the family sees) or "tutor" (Observacions per al tutor, internal).
+    block: "observacions" (the subject's general remarks) or "aspectes"
+    (Aspectes acadèmics, personals i evolutius).
+
+    Without confirm=True it returns a PREVIEW with the current and the new text
+    and saves nothing; call again with confirm=True only after the teacher
+    approves the exact text."""
+    sid, alu, trm = str(subject_id).strip(), str(alu_id).strip(), str(term_id).strip()
+    if not (sid.isdigit() and alu.isdigit()) or (trm and not trm.isdigit()):
+        return _err("subject_id, alu_id and term_id must be numeric.")
+    k, b = str(kind).strip().lower(), str(block).strip().lower()
+    if k not in _REMARK_KINDS:
+        return _err('kind must be "butlleti" or "tutor".')
+    if b not in _REMARK_BLOCKS:
+        return _err('block must be "observacions" or "aspectes".')
+    field, css = _REMARK_KINDS[k]
+    typ = _REMARK_BLOCKS[b]
+    new = str(text).replace("\r\n", "\n").strip()
     try:
-        msg = json.loads(resp)
-    except json.JSONDecodeError:
-        msg = {"error": 1, "msg": (parse.page_error(resp) or resp[:200])}
-    now = next((g.get("nota_mod") for g in after
-                if str(g.get("id_alumne")) == alu and str(g.get("id_criteri")) == it["item_id"]
-                and str(g.get("type")) == cell["type"]), None)
-    return _ok({**preview, "done": True,
-                "clickedu": msg.get("msg"), "clickedu_error": str(msg.get("error")) == "1",
-                "verified": _same_grade(now, new), "now": now})
+        info = _grade_page(sid, trm)
+        structure = parse.parse_evaluation_structure(info["page"])
+        rq = (f"go/Index.php?ctr=Evaluate/EvaluateTermly&do=GradesRemarks&id={sid}"
+              f"&trm={trm or info['trm_id']}")
+        remarks_page = _s().get(rq)
+    except LoginError as e:
+        return _err(f"login: {e}")
+    except (ValueError, json.JSONDecodeError) as e:
+        return _err(str(e))
+    err = parse.page_error(remarks_page)
+    if err:
+        return _err(f"Clickedu said: {err}")
+    student = _student_or_error(structure, alu)
+    if not student:
+        return _err("That student is not on this subject's Avaluar page.")
+    if f'name="evalObject{css}_{alu}_{sid}_{typ}"' not in remarks_page:
+        return _err("That remark field does not exist for this student and subject "
+                    "in Clickedu (the school may not use it).")
+    grades = info["grades"]
+    g = _find_grade(grades, alu, sid, typ)
+    before = g.get(field) or ""
+    preview = {
+        "action": "set_subject_remark",
+        "subject": structure.get("subject"), "course": structure.get("course"),
+        "term": structure.get("term"), "student": student["name"], "alu_id": alu,
+        "remark": {"kind": k, "block": b, "before": before, "after": new},
+        "note": ("butlleti remarks are printed on the report card the family receives."
+                 if k == "butlleti" else "tutor remarks are internal, for the tutor."),
+    }
+    if before.strip() == new:
+        return _ok({**preview, "done": False, "result": "unchanged, nothing to save"})
+    if not confirm:
+        return _ok({**preview, "done": False,
+                    "confirm": "Call again with confirm=true to save this one remark."})
+    if g:
+        g[field] = new
+    else:
+        # The remarks page ticks 'Visible a l'acta' by default for a new block.
+        grades.append(_new_grade_object(info, sid, typ, alu, ind_acta=True, **{field: new}))
+    res = _save_grades(sid, trm, info, grades)
+    if "error" in res:
+        return _err(res["error"])
+    now = _find_grade(res["after"], alu, sid, typ).get(field) or ""
+    return _ok({**preview, "done": True, "clickedu": res["msg"],
+                "clickedu_error": res["clickedu_error"],
+                "verified": now.strip() == new, "now": now})
 
 @mcp.tool()
 def mark_attendance(
