@@ -1,12 +1,12 @@
 ---
 name: clickedu-avaluacio
-allowed-tools: [mcp__clickedu__get_subjects_and_rosters, mcp__clickedu__get_evaluation, mcp__clickedu__set_grade]
+allowed-tools: [mcp__clickedu__get_subjects_and_rosters, mcp__clickedu__get_evaluation, mcp__clickedu__set_grade, mcp__clickedu__calculate_grades]
 description: >-
   Consultar i posar notes a l'avaluació d'una assignatura a Clickedu: apartats,
   activitats, percentatges, notes posades i posar o corregir una nota. Usa-la
   quan el profe digui "les notes de", "quines notes té", "consultar l'avaluació",
-  "els apartats i percentatges", "posa-li un 7 a", "corregeix la nota de",
-  "avaluar", "notas de la 1ª evaluación", "ponle un 7 en", "cambia la nota de",
+  "els apartats i percentatges", "posa-li un 7 a", "corregeix la nota de", "calcula la nota final", "recalcula",
+  "avaluar", "notas de la 1ª evaluación", "ponle un 7 en", "cambia la nota de", "calcula la nota final",
   "qui no té nota de".
 ---
 
@@ -41,7 +41,20 @@ Regles:
 - `item="final"` és la nota final; `grade=""` esborra la nota.
 - La nota ha de ser dins del rang de la casella (normalment 0-10); la final
   només admet els valors del desplegable.
-- **No recalcula** les notes d'apartat ni la final (el botó «calcular» de
-  Clickedu); digues-ho al profe si canvia una activitat.
+- `set_grade` **no recalcula** les notes d'apartat ni la final; per això hi ha
+  `calculate_grades` (a sota).
 - No fa «Guardar i tancar matèria». Si algú ha desat la pàgina entre la lectura
   i l'escriptura, no escriu res: torna a començar.
+
+## Recalcular apartats i nota final (un alumne, amb confirmació)
+
+És el botó «calcular» d'un alumne. Fes-lo després de posar-li notes.
+
+1. `calculate_grades(subject_id, alu_id, term_id)` sense `confirm` →
+   **previsualització**: cada apartat i la nota final calculada que canviaria
+   (abans i després). Clickedu fa el càlcul amb les notes i els percentatges.
+2. Ensenya-la al profe; només si diu que sí, torna a cridar amb `confirm=true`.
+
+- Un alumne per confirmació, mai tota la classe d'un cop.
+- No toca la nota final que el profe tria al desplegable (`item="final"` de
+  `set_grade`): només el valor calculat que surt al costat.

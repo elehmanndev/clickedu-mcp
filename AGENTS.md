@@ -7,7 +7,7 @@ handles students' data, so keep that in mind in every change.
 ## Ground rules
 
 - **Reads are free; every write is one explicit, teacher-confirmed action.** The
-  write tools (`mark_attendance`, `set_grade`, `send_message`...) return a preview first and only
+  write tools (`mark_attendance`, `set_grade`, `set_subject_remark`, `send_message`...) return a preview first and only
   POST when called again with `confirm=true`. Never add bulk writes, loops over a
   class, scheduled runs, or student impersonation (`popup_suplantar_alu`).
 - **No credentials in code, tests, fixtures, logs, or commit messages.** Secrets
@@ -84,6 +84,21 @@ and its scripts (`jquery_actions.js`, `jquery_calculation.js`,
 - Saving does not recalculate section or final grades: that is a separate
   `do=CalculateStudents` call behind the "calcular" button. "Guardar i tancar
   materia" (`do=SaveClose`) locks the subject; never call it.
+- "calcular" for one student POSTs that student's GetGrades entries as `grades`
+  to `do=CalculateStudents&id=<subject_id>&trm=<term>` and gets back a list:
+  entries with `nota` are computed values (sections, final type 114), entries
+  with only `nota_mod` echo typed grades. It changes nothing on the server; the
+  page copies each `nota` into its list (`updateCalcGrade`) and Guardar saves it.
+  `calculate_grades` does the same: preview the changed `nota`s, then save.
+- End-of-term subject remarks live in the same GetGrades list, on the subject
+  object (`id_criteri` = subject id) of type 114 ("Observacions") or 123
+  ("Aspectes acadèmics, personals i evolutius"), in `observacions_butlleti`
+  (report card, read by families) and `observacions_tutor`. The editing page is
+  `do=GradesRemarks&id=<subject_id>&trm=<term>` (textareas
+  `evalObjectObservacionsButlleti_<alu>_<subject>_<type>` and `...Tutor_...`);
+  it saves through the same `do=Save`. The per-student `do=Remarks` popup on the
+  Avaluar page is read-only. A new type 123 object is created with `ind_acta`
+  true, matching the page's default "Visible a l'acta" tick.
 - Validated on a real account on 2026-11-19: one `confirm=true` save of a new
   activity grade answered JSON with `msg` "Guardat correctament" and `error`
   not 1, the re-read showed the new value, and a
